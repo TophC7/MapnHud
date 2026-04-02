@@ -1,0 +1,7 @@
+{
+  "java.jdt.ls.java.home": "",
+  "java.import.gradle.java.home": "",
+  "java.configuration.updateBuildConfiguration": "automatic",
+  "nix.enableLanguageServer": true,
+  "nixEnvSelector.nixFile": "${workspaceFolder}/flake.nix"
+}
