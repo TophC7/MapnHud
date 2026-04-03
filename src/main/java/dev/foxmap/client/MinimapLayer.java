@@ -8,6 +8,7 @@ import com.mojang.blaze3d.vertex.Tesselator;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import com.mojang.math.Axis;
 import dev.foxmap.FoxMapMod;
+import dev.foxmap.client.FoxMapConfig;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
@@ -26,14 +27,16 @@ import org.joml.Matrix4f;
 /**
  * Registers and renders the minimap as a NeoForge GUI layer.
  *
- * <p>The map is drawn in the top-right corner as a square. The terrain texture
- * is rotated around its center so the player's facing direction is always "up."
+ * <p>The map is drawn as a configurable rectangle. The terrain texture
+ * is rotated around its center so the player's facing direction is always "up"
+ * (unless north-lock is enabled).
  *
  * <p>Features:
  * <ul>
  *   <li>Smooth scrolling via sub-block quad offset
  *   <li>Nearby player dots with UUID-derived colors and distance fading
  *   <li>Scissor-clipped rotation so corners never show
+ *   <li>Configurable size, position, opacity, and aspect ratio
  * </ul>
  */
 @EventBusSubscriber(modid = FoxMapMod.MOD_ID, value = Dist.CLIENT)
@@ -41,9 +44,6 @@ public class MinimapLayer {
 
   /** Padding from screen edge. */
   private static final int MARGIN = 8;
-
-  /** Half the map pixel count, used as a base for dot clamping with scale. */
-  private static final int HALF_MAP = MinimapAssembler.MAP_SIZE / 2;
 
   private static final MinimapRenderer renderer = new MinimapRenderer();
 
@@ -63,12 +63,14 @@ public class MinimapLayer {
 
     if (mc.options.hideGui || mc.getDebugOverlay().showDebugScreen()) return;
 
-    // Display size and zoom scale
-    int displaySize = MinimapKeybinds.getDisplaySize();
+    // All config values cached per-tick by MinimapKeybinds, no config tree traversal here
+    int configSize = MinimapKeybinds.getDisplaySize();
+    float aspectRatio = MinimapKeybinds.getAspectRatio();
+    int displayW = configSize;
+    int displayH = Math.round(configSize / aspectRatio);
+    int texSize = displayW;
     int scale = MinimapKeybinds.getScale();
-
-    // Screen pixels per world block, accounting for zoom
-    float pixelScale = (float) displaySize / (MinimapAssembler.MAP_SIZE * scale);
+    float pixelScale = 1.0f / scale;
 
     // Interpolated position for smooth scrolling
     float partialTick = delta.getGameTimeDeltaPartialTick(false);
@@ -77,18 +79,30 @@ public class MinimapLayer {
 
     ChunkColorCache cache = ChunkCacheEventHandler.getCache();
     boolean cacheUpdated = ChunkCacheEventHandler.consumeDirty();
-    ResourceLocation texId = renderer.update(playerX, playerZ, cache, cacheUpdated, scale);
+    ResourceLocation texId = renderer.update(playerX, playerZ, cache, cacheUpdated, scale, texSize);
     if (texId == null) return;
 
     int screenW = graphics.guiWidth();
-    int mapX = screenW - displaySize - MARGIN;
-    int mapY = MARGIN;
-    int centerX = mapX + displaySize / 2;
-    int centerY = mapY + displaySize / 2;
+    int screenH = graphics.guiHeight();
 
-    // Rotation: player's facing direction becomes "up"
-    float yaw = player.getYRot();
-    float rotation = yaw + 180.0f;
+    FoxMapConfig.ScreenCorner corner = MinimapKeybinds.getPosition();
+    int mapX, mapY;
+    switch (corner) {
+      case TOP_LEFT -> { mapX = MARGIN; mapY = MARGIN; }
+      case BOTTOM_LEFT -> { mapX = MARGIN; mapY = screenH - displayH - MARGIN; }
+      case BOTTOM_RIGHT -> { mapX = screenW - displayW - MARGIN; mapY = screenH - displayH - MARGIN; }
+      default -> { mapX = screenW - displayW - MARGIN; mapY = MARGIN; } // TOP_RIGHT
+    }
+    int centerX = mapX + displayW / 2;
+    int centerY = mapY + displayH / 2;
+
+    float rotation;
+    if (MinimapKeybinds.isNorthLocked()) {
+      rotation = 0.0f;
+    } else {
+      float yaw = player.getYRot();
+      rotation = yaw + 180.0f;
+    }
 
     // Sub-block fractional offset for smooth scrolling
     float fractX = (float) (playerX - Math.floor(playerX));
@@ -97,8 +111,8 @@ public class MinimapLayer {
     float offsetZ = -fractZ * pixelScale;
 
     // -- Scissor + background --
-    graphics.enableScissor(mapX, mapY, mapX + displaySize, mapY + displaySize);
-    graphics.fill(mapX, mapY, mapX + displaySize, mapY + displaySize, 0xAA000000);
+    graphics.enableScissor(mapX, mapY, mapX + displayW, mapY + displayH);
+    graphics.fill(mapX, mapY, mapX + displayW, mapY + displayH, 0xAA000000);
 
     // -- Rotated terrain texture --
     graphics.pose().pushPose();
@@ -109,42 +123,46 @@ public class MinimapLayer {
     float rotScale = 1.42f;
     graphics.pose().scale(rotScale, rotScale, 1.0f);
 
-    // Apply smooth scroll offset, then center the quad
+    // Draw the quad as a square (texSize x texSize) so it fills the display
+    // rectangle at any rotation angle. The scissor clips to the actual frame shape.
     graphics.pose().translate(
-        offsetX - displaySize / 2.0f,
-        offsetZ - displaySize / 2.0f,
+        offsetX - texSize / 2.0f,
+        offsetZ - texSize / 2.0f,
         0);
 
+    float opacity = MinimapKeybinds.getOpacity();
     RenderSystem.setShaderTexture(0, texId);
     RenderSystem.setShader(GameRenderer::getPositionTexShader);
+    RenderSystem.setShaderColor(1.0f, 1.0f, 1.0f, opacity);
     RenderSystem.enableBlend();
 
     Matrix4f matrix = graphics.pose().last().pose();
     BufferBuilder buf = Tesselator.getInstance().begin(
         VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_TEX);
-    buf.addVertex(matrix, 0, displaySize, 0).setUv(0, 1);
-    buf.addVertex(matrix, displaySize, displaySize, 0).setUv(1, 1);
-    buf.addVertex(matrix, displaySize, 0, 0).setUv(1, 0);
+    buf.addVertex(matrix, 0, texSize, 0).setUv(0, 1);
+    buf.addVertex(matrix, texSize, texSize, 0).setUv(1, 1);
+    buf.addVertex(matrix, texSize, 0, 0).setUv(1, 0);
     buf.addVertex(matrix, 0, 0, 0).setUv(0, 0);
     BufferUploader.drawWithShader(buf.buildOrThrow());
 
+    RenderSystem.setShaderColor(1.0f, 1.0f, 1.0f, 1.0f);
     RenderSystem.disableBlend();
 
     // -- Player dots (inside the rotated pose stack so they rotate with the map) --
-    int halfBlocks = HALF_MAP * scale;
-    renderPlayerDots(graphics, mc, player, playerX, playerZ, displaySize, pixelScale, halfBlocks);
+    int halfBlocks = (texSize / 2) * scale;
+    renderPlayerDots(graphics, mc, player, playerX, playerZ, displayW, displayH, pixelScale, halfBlocks);
 
     graphics.pose().popPose();
     graphics.disableScissor();
 
     // -- Border --
     int borderColor = 0xFF222222;
-    graphics.fill(mapX - 1, mapY - 1, mapX + displaySize + 1, mapY, borderColor);
-    graphics.fill(mapX - 1, mapY + displaySize, mapX + displaySize + 1,
-        mapY + displaySize + 1, borderColor);
-    graphics.fill(mapX - 1, mapY, mapX, mapY + displaySize, borderColor);
-    graphics.fill(mapX + displaySize, mapY, mapX + displaySize + 1,
-        mapY + displaySize, borderColor);
+    graphics.fill(mapX - 1, mapY - 1, mapX + displayW + 1, mapY, borderColor);
+    graphics.fill(mapX - 1, mapY + displayH, mapX + displayW + 1,
+        mapY + displayH + 1, borderColor);
+    graphics.fill(mapX - 1, mapY, mapX, mapY + displayH, borderColor);
+    graphics.fill(mapX + displayW, mapY, mapX + displayW + 1,
+        mapY + displayH, borderColor);
 
     // -- Player indicator (fixed at center, not rotated) --
     graphics.fill(centerX - 2, centerY - 2, centerX + 2, centerY + 2, 0xFFFFFFFF);
@@ -162,10 +180,11 @@ public class MinimapLayer {
    */
   private static void renderPlayerDots(
       GuiGraphics graphics, Minecraft mc, LocalPlayer localPlayer,
-      double playerX, double playerZ, int displaySize, float pixelScale,
-      int halfBlocks) {
+      double playerX, double playerZ, int displayW, int displayH,
+      float pixelScale, int halfBlocks) {
 
-    float halfDisplay = displaySize / 2.0f;
+    float halfW = displayW / 2.0f;
+    float halfH = displayH / 2.0f;
 
     for (AbstractClientPlayer other : mc.level.players()) {
       if (other == localPlayer) continue;
@@ -184,8 +203,8 @@ public class MinimapLayer {
       }
 
       // Convert world offset to pixel coordinates on the display quad
-      float px = (float) (dx * pixelScale) + halfDisplay;
-      float pz = (float) (dz * pixelScale) + halfDisplay;
+      float px = (float) (dx * pixelScale) + halfW;
+      float pz = (float) (dz * pixelScale) + halfH;
 
       // Alpha fading: vivid close, fades to 100 at max distance
       int alpha;
@@ -198,7 +217,7 @@ public class MinimapLayer {
 
       int dotColor = uuidColor(other.getUUID().hashCode(), alpha);
 
-      // 3×3 filled rect
+      // 3x3 filled rect
       int x1 = Math.round(px) - 1;
       int z1 = Math.round(pz) - 1;
       graphics.fill(x1, z1, x1 + 3, z1 + 3, dotColor);
