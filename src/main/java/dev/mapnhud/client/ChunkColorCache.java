@@ -1,4 +1,4 @@
-package dev.foxmap.client;
+package dev.mapnhud.client;
 
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import java.util.ArrayDeque;

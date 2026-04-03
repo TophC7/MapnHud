@@ -1,6 +1,6 @@
-package dev.foxmap.client;
+package dev.mapnhud.client;
 
-import dev.foxmap.FoxMapMod;
+import dev.mapnhud.MapnHudMod;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -59,7 +59,7 @@ public final class BlockColorExtractor {
     }
 
     initialized = true;
-    FoxMapMod.LOG.info("Extracted texture colors for {} blocks", count);
+    MapnHudMod.LOG.info("Extracted texture colors for {} blocks", count);
   }
 
   /**

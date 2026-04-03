@@ -1,4 +1,4 @@
-package dev.foxmap.client;
+package dev.mapnhud.client;
 
 import com.mojang.blaze3d.platform.NativeImage;
 import net.minecraft.client.Minecraft;
@@ -65,7 +65,7 @@ public class MinimapRenderer {
     texture = new DynamicTexture(image);
     textureId = Minecraft.getInstance()
         .getTextureManager()
-        .register("fox_map_minimap", texture);
+        .register("mapnhud_minimap", texture);
     needsRefresh = true;
   }
 

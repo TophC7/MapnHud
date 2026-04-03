@@ -1,4 +1,4 @@
-package dev.foxmap.client;
+package dev.mapnhud.client;
 
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.BufferBuilder;
@@ -7,8 +7,8 @@ import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import com.mojang.blaze3d.vertex.Tesselator;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import com.mojang.math.Axis;
-import dev.foxmap.FoxMapMod;
-import dev.foxmap.client.FoxMapConfig;
+import dev.mapnhud.MapnHudMod;
+import dev.mapnhud.client.MapnHudConfig;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
@@ -39,7 +39,7 @@ import org.joml.Matrix4f;
  *   <li>Configurable size, position, opacity, and aspect ratio
  * </ul>
  */
-@EventBusSubscriber(modid = FoxMapMod.MOD_ID, value = Dist.CLIENT)
+@EventBusSubscriber(modid = MapnHudMod.MOD_ID, value = Dist.CLIENT)
 public class MinimapLayer {
 
   /** Padding from screen edge. */
@@ -48,12 +48,12 @@ public class MinimapLayer {
   private static final MinimapRenderer renderer = new MinimapRenderer();
 
   private static final ResourceLocation LAYER_ID =
-      ResourceLocation.fromNamespaceAndPath(FoxMapMod.MOD_ID, "minimap");
+      ResourceLocation.fromNamespaceAndPath(MapnHudMod.MOD_ID, "minimap");
 
   @SubscribeEvent
   public static void registerLayer(RegisterGuiLayersEvent event) {
     event.registerAbove(VanillaGuiLayers.HOTBAR, LAYER_ID, MinimapLayer::render);
-    FoxMapMod.LOG.info("Registered minimap GUI layer");
+    MapnHudMod.LOG.info("Registered minimap GUI layer");
   }
 
   private static void render(GuiGraphics graphics, DeltaTracker delta) {
@@ -85,7 +85,7 @@ public class MinimapLayer {
     int screenW = graphics.guiWidth();
     int screenH = graphics.guiHeight();
 
-    FoxMapConfig.ScreenCorner corner = MinimapKeybinds.getPosition();
+    MapnHudConfig.ScreenCorner corner = MinimapKeybinds.getPosition();
     int mapX, mapY;
     switch (corner) {
       case TOP_LEFT -> { mapX = MARGIN; mapY = MARGIN; }

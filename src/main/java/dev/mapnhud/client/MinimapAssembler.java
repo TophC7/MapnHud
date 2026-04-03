@@ -1,4 +1,4 @@
-package dev.foxmap.client;
+package dev.mapnhud.client;
 
 import com.mojang.blaze3d.platform.NativeImage;
 

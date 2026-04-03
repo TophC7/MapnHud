@@ -43,7 +43,7 @@ lighting needs the full visible heightfield in one pass.
 - [ ] `PlayerDistancePayload`: server broadcasts distance + angle for beyond-render-distance players
 - [ ] Tiered update rates: <1000 blocks every 2-3s, >1000 blocks every 10-15s
 - [ ] Player cap per packet (~30 nearest)
-- [ ] Opt-in system: server config + per-player `/foxmap hide` command
+- [ ] Opt-in system: server config + per-player `/mapnhud hide` command
 - [ ] Paper plugin variant: same packet format, different platform API
 
 #### Compatibility
@@ -107,7 +107,7 @@ Overlays, panels, and UI elements outside the minimap.
 
 ### Config System
 
-- `ModConfigSpec` CLIENT type: saved to `.minecraft/config/fox_map-client.toml`
+- `ModConfigSpec` CLIENT type: saved to `.minecraft/config/mapnhud-client.toml`
 - `.set()` writes in-memory only; `SPEC.save()` flushes to disk
 - `IConfigScreenFactory` registered via `ModContainer.registerExtensionPoint()` for mod list gear icon
 - Vanilla tab system: `TabNavigationBar` + `TabManager` + `GridLayoutTab`

@@ -10,4 +10,7 @@ plugins {
     id 'org.gradle.toolchains.foojay-resolver-convention' version '1.0.0'
 }
 
-rootProject.name = 'fox_map'
+// Composite build: KwahsCore is resolved locally at build time
+includeBuild '../KwahsCore'
+
+rootProject.name = 'mapnhud'

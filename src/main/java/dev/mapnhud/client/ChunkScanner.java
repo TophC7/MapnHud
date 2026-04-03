@@ -1,4 +1,4 @@
-package dev.foxmap.client;
+package dev.mapnhud.client;
 
 import java.util.Set;
 import net.minecraft.client.Minecraft;

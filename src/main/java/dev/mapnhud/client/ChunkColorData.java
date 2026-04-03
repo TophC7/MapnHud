@@ -1,4 +1,4 @@
-package dev.foxmap.client;
+package dev.mapnhud.client;
 
 /**
  * Pre-computed terrain colors and heights for a single 16×16 chunk column.

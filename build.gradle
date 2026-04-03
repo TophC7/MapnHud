@@ -10,6 +10,11 @@ group = mod_group_id
 
 java.toolchain.languageVersion = JavaLanguageVersion.of(21)
 
+dependencies {
+    // Kwah's Core: shaded into the mod jar at build time via composite build
+    implementation 'xyz.kwahson.core:kwahs_core'
+}
+
 neoForge {
     version = project.neo_version
 

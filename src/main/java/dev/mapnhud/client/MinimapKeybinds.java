@@ -1,7 +1,7 @@
-package dev.foxmap.client;
+package dev.mapnhud.client;
 
 import com.mojang.blaze3d.platform.InputConstants;
-import dev.foxmap.FoxMapMod;
+import dev.mapnhud.MapnHudMod;
 import net.minecraft.client.KeyMapping;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.client.event.ClientTickEvent;
@@ -16,10 +16,10 @@ import org.lwjgl.glfw.GLFW;
  * <p>All config values are read once per tick and cached as primitives,
  * so the render path never traverses the config tree.
  */
-@EventBusSubscriber(modid = FoxMapMod.MOD_ID, value = Dist.CLIENT)
+@EventBusSubscriber(modid = MapnHudMod.MOD_ID, value = Dist.CLIENT)
 public class MinimapKeybinds {
 
-  private static final int[] ZOOM_SCALES = FoxMapConfig.ZOOM_SCALES;
+  private static final int[] ZOOM_SCALES = MapnHudConfig.ZOOM_SCALES;
   private static int runtimeZoomIndex = -1;
   private static int lastConfigZoom = -1;
 
@@ -28,13 +28,13 @@ public class MinimapKeybinds {
   private static float cachedAspectRatio = 1.0f;
   private static float cachedOpacity = 1.0f;
   private static boolean cachedNorthLock = false;
-  private static FoxMapConfig.ScreenCorner cachedPosition = FoxMapConfig.ScreenCorner.TOP_RIGHT;
+  private static MapnHudConfig.ScreenCorner cachedPosition = MapnHudConfig.ScreenCorner.TOP_RIGHT;
 
   private static final KeyMapping ZOOM_KEY = new KeyMapping(
-      "key." + FoxMapMod.MOD_ID + ".zoom",
+      "key." + MapnHudMod.MOD_ID + ".zoom",
       InputConstants.Type.KEYSYM,
       GLFW.GLFW_KEY_Z,
-      "key.categories." + FoxMapMod.MOD_ID
+      "key.categories." + MapnHudMod.MOD_ID
   );
 
   public static void register(RegisterKeyMappingsEvent event) {
@@ -44,18 +44,18 @@ public class MinimapKeybinds {
   @SubscribeEvent
   public static void onClientTick(ClientTickEvent.Post event) {
     // Sync zoom from config when it changes
-    int configZoom = FoxMapConfig.MAP_ZOOM.get();
+    int configZoom = MapnHudConfig.MAP_ZOOM.get();
     if (configZoom != lastConfigZoom) {
       lastConfigZoom = configZoom;
       runtimeZoomIndex = indexForScale(configZoom);
     }
 
     // Cache all config values as primitives for the render path
-    cachedDisplaySize = FoxMapConfig.MAP_SIZE.get();
-    cachedAspectRatio = FoxMapConfig.MAP_SHAPE.get().floatValue();
-    cachedOpacity = FoxMapConfig.MAP_OPACITY.get().floatValue();
-    cachedNorthLock = FoxMapConfig.MAP_NORTH_LOCK.get();
-    cachedPosition = FoxMapConfig.MAP_POSITION.get();
+    cachedDisplaySize = MapnHudConfig.MAP_SIZE.get();
+    cachedAspectRatio = MapnHudConfig.MAP_SHAPE.get().floatValue();
+    cachedOpacity = MapnHudConfig.MAP_OPACITY.get().floatValue();
+    cachedNorthLock = MapnHudConfig.MAP_NORTH_LOCK.get();
+    cachedPosition = MapnHudConfig.MAP_POSITION.get();
 
     while (ZOOM_KEY.consumeClick()) {
       runtimeZoomIndex = (runtimeZoomIndex + 1) % ZOOM_SCALES.length;
@@ -66,7 +66,7 @@ public class MinimapKeybinds {
   public static float getAspectRatio() { return cachedAspectRatio; }
   public static float getOpacity() { return cachedOpacity; }
   public static boolean isNorthLocked() { return cachedNorthLock; }
-  public static FoxMapConfig.ScreenCorner getPosition() { return cachedPosition; }
+  public static MapnHudConfig.ScreenCorner getPosition() { return cachedPosition; }
 
   public static int getScale() {
     if (runtimeZoomIndex < 0) return 1;

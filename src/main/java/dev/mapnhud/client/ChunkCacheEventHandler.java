@@ -1,6 +1,6 @@
-package dev.foxmap.client;
+package dev.mapnhud.client;
 
-import dev.foxmap.FoxMapMod;
+import dev.mapnhud.MapnHudMod;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.neoforged.api.distmarker.Dist;
@@ -13,7 +13,7 @@ import net.neoforged.neoforge.event.level.LevelEvent;
 /**
  * Routes NeoForge chunk and level events to {@link ChunkColorCache}.
  */
-@EventBusSubscriber(modid = FoxMapMod.MOD_ID, value = Dist.CLIENT)
+@EventBusSubscriber(modid = MapnHudMod.MOD_ID, value = Dist.CLIENT)
 public class ChunkCacheEventHandler {
 
   private static final ChunkColorCache CACHE = new ChunkColorCache();

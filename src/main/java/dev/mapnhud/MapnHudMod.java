@@ -1,8 +1,8 @@
-package dev.foxmap;
+package dev.mapnhud;
 
-import dev.foxmap.client.FoxMapConfig;
-import dev.foxmap.client.FoxMapConfigScreen;
-import dev.foxmap.client.MinimapKeybinds;
+import dev.mapnhud.client.MapnHudConfig;
+import dev.mapnhud.client.MapnHudConfigScreen;
+import dev.mapnhud.client.MinimapKeybinds;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.Mod;
@@ -13,20 +13,20 @@ import net.neoforged.neoforge.client.gui.IConfigScreenFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-@Mod(FoxMapMod.MOD_ID)
-public class FoxMapMod {
-  public static final String MOD_ID = "fox_map";
+@Mod(MapnHudMod.MOD_ID)
+public class MapnHudMod {
+  public static final String MOD_ID = "mapnhud";
   public static final Logger LOG = LoggerFactory.getLogger(MOD_ID);
 
-  public FoxMapMod(IEventBus modBus, ModContainer container) {
+  public MapnHudMod(IEventBus modBus, ModContainer container) {
     LOG.info("Fox Map loading");
 
     if (FMLEnvironment.dist.isClient()) {
-      container.registerConfig(ModConfig.Type.CLIENT, FoxMapConfig.SPEC);
+      container.registerConfig(ModConfig.Type.CLIENT, MapnHudConfig.SPEC);
       container.registerExtensionPoint(
           IConfigScreenFactory.class,
-          (mc, parent) -> new FoxMapConfigScreen(parent));
-      modBus.addListener(FoxMapMod::onRegisterKeys);
+          (mc, parent) -> new MapnHudConfigScreen(parent));
+      modBus.addListener(MapnHudMod::onRegisterKeys);
     }
   }
 

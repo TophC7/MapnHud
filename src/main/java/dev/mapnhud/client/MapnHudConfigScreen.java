@@ -1,7 +1,7 @@
-package dev.foxmap.client;
+package dev.mapnhud.client;
 
-import dev.foxmap.client.FoxMapConfig.ScreenCorner;
-import dev.foxmap.client.FoxMapConfig.TooltipPosition;
+import dev.mapnhud.client.MapnHudConfig.ScreenCorner;
+import dev.mapnhud.client.MapnHudConfig.TooltipPosition;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.AbstractSliderButton;
@@ -23,10 +23,10 @@ import net.minecraft.util.Mth;
  * Configuration screen for Fox Map, accessible from the NeoForge mod list.
  *
  * <p>Uses vanilla's tab navigation system (same as Create World screen) to
- * separate Map and HUD settings. All changes write to {@link FoxMapConfig}
+ * separate Map and HUD settings. All changes write to {@link MapnHudConfig}
  * immediately and take effect without restart.
  */
-public class FoxMapConfigScreen extends Screen {
+public class MapnHudConfigScreen extends Screen {
 
   private static final int COL_WIDTH = 200;
   private static final int COL_GAP = 12;
@@ -38,7 +38,7 @@ public class FoxMapConfigScreen extends Screen {
   private TabNavigationBar tabNavBar;
   private TabManager tabManager;
 
-  public FoxMapConfigScreen(Screen parent) {
+  public MapnHudConfigScreen(Screen parent) {
     super(Component.literal("Fox Map Settings"));
     this.parent = parent;
   }
@@ -80,41 +80,41 @@ public class FoxMapConfigScreen extends Screen {
 
     // Left: Zoom
     grid.addChild(CycleButton.<Integer>builder(v -> Component.literal(v + "x"))
-        .withValues(java.util.Arrays.stream(FoxMapConfig.ZOOM_SCALES).boxed().toList())
-        .withInitialValue(FoxMapConfig.MAP_ZOOM.get())
+        .withValues(java.util.Arrays.stream(MapnHudConfig.ZOOM_SCALES).boxed().toList())
+        .withInitialValue(MapnHudConfig.MAP_ZOOM.get())
         .create(0, 0, COL_WIDTH, 20, Component.literal("Zoom"),
-            (btn, val) -> FoxMapConfig.MAP_ZOOM.set(val)), row, 0);
+            (btn, val) -> MapnHudConfig.MAP_ZOOM.set(val)), row, 0);
 
     // Right: Size slider (80-320)
     grid.addChild(intSlider(COL_WIDTH, "Size", "px",
-        80, 320, 10, FoxMapConfig.MAP_SIZE.get(),
-        val -> FoxMapConfig.MAP_SIZE.set(val)), row, 1);
+        80, 320, 10, MapnHudConfig.MAP_SIZE.get(),
+        val -> MapnHudConfig.MAP_SIZE.set(val)), row, 1);
     row++;
 
     // Left: North Lock
-    grid.addChild(CycleButton.onOffBuilder(FoxMapConfig.MAP_NORTH_LOCK.get())
+    grid.addChild(CycleButton.onOffBuilder(MapnHudConfig.MAP_NORTH_LOCK.get())
         .create(0, 0, COL_WIDTH, 20, Component.literal("Lock North Up"),
-            (btn, val) -> FoxMapConfig.MAP_NORTH_LOCK.set(val)), row, 0);
+            (btn, val) -> MapnHudConfig.MAP_NORTH_LOCK.set(val)), row, 0);
 
     // Right: Shape (fixed ratio presets)
     grid.addChild(CycleButton.<ShapePreset>builder(p -> Component.literal(p.label))
         .withValues(ShapePreset.ALL)
-        .withInitialValue(ShapePreset.closest(FoxMapConfig.MAP_SHAPE.get()))
+        .withInitialValue(ShapePreset.closest(MapnHudConfig.MAP_SHAPE.get()))
         .create(0, 0, COL_WIDTH, 20, Component.literal("Shape"),
-            (btn, val) -> FoxMapConfig.MAP_SHAPE.set(val.ratio)), row, 1);
+            (btn, val) -> MapnHudConfig.MAP_SHAPE.set(val.ratio)), row, 1);
     row++;
 
     // Left: Position
     grid.addChild(CycleButton.<ScreenCorner>builder(v -> Component.literal(v.label()))
         .withValues(ScreenCorner.values())
-        .withInitialValue(FoxMapConfig.MAP_POSITION.get())
+        .withInitialValue(MapnHudConfig.MAP_POSITION.get())
         .create(0, 0, COL_WIDTH, 20, Component.literal("Position"),
-            (btn, val) -> FoxMapConfig.MAP_POSITION.set(val)), row, 0);
+            (btn, val) -> MapnHudConfig.MAP_POSITION.set(val)), row, 0);
 
     // Right: Opacity slider (30%-100%)
     grid.addChild(percentSlider(COL_WIDTH, "Opacity",
-        0.3, 1.0, FoxMapConfig.MAP_OPACITY.get(),
-        val -> FoxMapConfig.MAP_OPACITY.set(val)), row, 1);
+        0.3, 1.0, MapnHudConfig.MAP_OPACITY.get(),
+        val -> MapnHudConfig.MAP_OPACITY.set(val)), row, 1);
     row++;
 
     grid.addChild(SpacerElement.height(6), row, 0, 1, 2);
@@ -141,20 +141,20 @@ public class FoxMapConfigScreen extends Screen {
     grid.addChild(sectionTitle("Tab List", font), row, 1);
     row++;
 
-    grid.addChild(CycleButton.onOffBuilder(FoxMapConfig.BLOCK_TOOLTIP_ENABLED.get())
+    grid.addChild(CycleButton.onOffBuilder(MapnHudConfig.BLOCK_TOOLTIP_ENABLED.get())
         .create(0, 0, COL_WIDTH, 20, Component.literal("Block Tooltip"),
-            (btn, val) -> FoxMapConfig.BLOCK_TOOLTIP_ENABLED.set(val)), row, 0);
+            (btn, val) -> MapnHudConfig.BLOCK_TOOLTIP_ENABLED.set(val)), row, 0);
 
-    grid.addChild(CycleButton.onOffBuilder(FoxMapConfig.TAB_DISTANCES_ENABLED.get())
+    grid.addChild(CycleButton.onOffBuilder(MapnHudConfig.TAB_DISTANCES_ENABLED.get())
         .create(0, 0, COL_WIDTH, 20, Component.literal("Tab Distances"),
-            (btn, val) -> FoxMapConfig.TAB_DISTANCES_ENABLED.set(val)), row, 1);
+            (btn, val) -> MapnHudConfig.TAB_DISTANCES_ENABLED.set(val)), row, 1);
     row++;
 
     grid.addChild(CycleButton.<TooltipPosition>builder(v -> Component.literal(v.label()))
         .withValues(TooltipPosition.values())
-        .withInitialValue(FoxMapConfig.BLOCK_TOOLTIP_POSITION.get())
+        .withInitialValue(MapnHudConfig.BLOCK_TOOLTIP_POSITION.get())
         .create(0, 0, COL_WIDTH, 20, Component.literal("Tooltip Position"),
-            (btn, val) -> FoxMapConfig.BLOCK_TOOLTIP_POSITION.set(val)), row, 0);
+            (btn, val) -> MapnHudConfig.BLOCK_TOOLTIP_POSITION.set(val)), row, 0);
 
     return tab;
   }
@@ -179,7 +179,7 @@ public class FoxMapConfigScreen extends Screen {
 
   @Override
   public void onClose() {
-    FoxMapConfig.SPEC.save();
+    MapnHudConfig.SPEC.save();
     this.minecraft.setScreen(parent);
   }
 

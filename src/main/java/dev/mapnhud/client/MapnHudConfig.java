@@ -1,14 +1,14 @@
-package dev.foxmap.client;
+package dev.mapnhud.client;
 
 import net.neoforged.neoforge.common.ModConfigSpec;
 
 /**
  * Client-side configuration for Fox Map.
  *
- * <p>All values are CLIENT type, stored in {@code fox_map-client.toml}.
+ * <p>All values are CLIENT type, stored in {@code mapnhud-client.toml}.
  * Changes take effect immediately without restart via {@code .get()}.
  */
-public final class FoxMapConfig {
+public final class MapnHudConfig {
 
   public static final ModConfigSpec SPEC;
 
@@ -78,7 +78,7 @@ public final class FoxMapConfig {
     SPEC = builder.build();
   }
 
-  private FoxMapConfig() {}
+  private MapnHudConfig() {}
 
   // -- Enums --
 
