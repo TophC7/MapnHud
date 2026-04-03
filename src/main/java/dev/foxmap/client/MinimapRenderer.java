@@ -20,12 +20,16 @@ public class MinimapRenderer {
   private int lastBlockZ = Integer.MIN_VALUE;
   private boolean needsUpload = true;
 
+  private int lastScale = -1;
+
   /**
    * Update the minimap texture for the current frame.
-   * Re-assembles when the player moves to a new block or when cache data changes.
+   * Re-assembles when the player moves to a new block, cache data changes,
+   * or the zoom scale changes.
    */
   public ResourceLocation update(
-      double playerX, double playerZ, ChunkColorCache cache, boolean cacheUpdated) {
+      double playerX, double playerZ, ChunkColorCache cache,
+      boolean cacheUpdated, int scale) {
 
     if (texture == null) {
       init();
@@ -35,10 +39,12 @@ public class MinimapRenderer {
     int blockZ = (int) Math.floor(playerZ);
 
     boolean posChanged = blockX != lastBlockX || blockZ != lastBlockZ;
-    if (posChanged || cacheUpdated || needsUpload) {
-      assembler.assemble(image, cache, blockX, blockZ);
+    boolean scaleChanged = scale != lastScale;
+    if (posChanged || cacheUpdated || scaleChanged || needsUpload) {
+      assembler.assemble(image, cache, blockX, blockZ, scale);
       lastBlockX = blockX;
       lastBlockZ = blockZ;
+      lastScale = scale;
       needsUpload = true;
     }
 

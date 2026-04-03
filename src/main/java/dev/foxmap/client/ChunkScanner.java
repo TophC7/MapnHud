@@ -3,11 +3,13 @@ package dev.foxmap.client;
 import java.util.Set;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.color.block.BlockColors;
+import net.minecraft.client.renderer.BiomeColors;
 import net.minecraft.core.BlockPos;
+import net.minecraft.tags.FluidTags;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
-import net.minecraft.world.level.block.CropBlock;
+import net.minecraft.world.level.block.LeavesBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.levelgen.Heightmap;
@@ -19,10 +21,34 @@ import net.minecraft.world.level.material.MapColor;
  * <p>Uses {@link BlockColors} for per-block tint accuracy and
  * {@link BlockColorExtractor} for texture-based colors. Ground-cover noise
  * (short grass, ferns) is skipped in favor of the block underneath.
+ *
+ * <p>Water columns are rendered as the floor block blended with a biome-tinted
+ * water overlay, with opacity scaling by depth.
  */
 public final class ChunkScanner {
 
   private ChunkScanner() {}
+
+  // -- Tuning constants --
+
+  /** Leaves are darkened relative to surrounding terrain so trees are visible. */
+  private static final float LEAF_SHADE = 0.75f;
+
+  /** Per-block height factor for sea-level-relative terrain shading. */
+  private static final float HEIGHT_FACTOR = 0.012f;
+  private static final float HEIGHT_MOD_MIN = 0.78f;
+  private static final float HEIGHT_MOD_MAX = 1.15f;
+
+  /** Water overlay alpha ramp: alpha = min(MAX, BASE + depth * PER_DEPTH). */
+  private static final float WATER_ALPHA_BASE = 0.55f;
+  private static final float WATER_ALPHA_PER_DEPTH = 0.04f;
+  private static final float WATER_ALPHA_MAX = 0.82f;
+
+  /** Edge shading dither amplitude and thresholds. */
+  private static final double DITHER_AMPLITUDE = 0.4;
+  private static final double EDGE_THRESH_HIGH = 0.6;
+  private static final double EDGE_THRESH_LOW = -0.3;
+  private static final double EDGE_THRESH_LOWEST = -0.6;
 
   private static final Set<Block> SKIP_BLOCKS = Set.of(
       Blocks.SHORT_GRASS,
@@ -32,95 +58,129 @@ public final class ChunkScanner {
       Blocks.DEAD_BUSH
   );
 
-  public static ChunkColorData scan(ChunkAccess chunk, Level level, long gameTick) {
+  /**
+   * Result of scanning a single column. Captures the floor block and water info.
+   * When {@code waterDepth > 0}, the block is underwater and {@code waterSurfaceY}
+   * holds the Y of the topmost water block for biome tint lookup.
+   */
+  private record ColumnResult(BlockState block, int blockY, int waterDepth, int waterSurfaceY) {
+    boolean isWater() { return waterDepth > 0; }
+    boolean isEmpty() { return block.isAir(); }
+  }
+
+  /**
+   * Scans a chunk and produces shaded terrain colors. If the north neighbor's
+   * cached data is available, row 0 gets correct cross-chunk edge shading
+   * immediately. Otherwise row 0 uses NORMAL brightness and will be corrected
+   * when this chunk is re-scanned after the neighbor is cached.
+   *
+   * @param northNeighbor cached data for the chunk at (cx, cz-1), or null
+   */
+  public static ChunkColorData scan(
+      ChunkAccess chunk, Level level, long gameTick,
+      ChunkColorData northNeighbor) {
+
     int[] colors = new int[ChunkColorData.PIXELS];
     int[] heights = new int[ChunkColorData.PIXELS];
 
     int chunkWorldX = chunk.getPos().getMinBlockX();
     int chunkWorldZ = chunk.getPos().getMinBlockZ();
+
+    // Global baseline eliminates brightness seams at chunk boundaries
+    int seaLevel = level.getSeaLevel();
+
     BlockPos.MutableBlockPos mutable = new BlockPos.MutableBlockPos();
-    BlockPos.MutableBlockPos waterProbe = new BlockPos.MutableBlockPos();
     BlockColors blockColors = Minecraft.getInstance().getBlockColors();
 
     for (int localX = 0; localX < 16; localX++) {
       int worldX = chunkWorldX + localX;
-      int prevHeight = 0;
+      // Seed prevHeight from the north neighbor's row 15 if available
+      int prevHeight = (northNeighbor != null)
+          ? northNeighbor.getHeight(localX, 15)
+          : 0;
 
       for (int localZ = 0; localZ < 16; localZ++) {
         int worldZ = chunkWorldZ + localZ;
         int idx = localX * 16 + localZ;
-
         int surfaceY = level.getHeight(Heightmap.Types.WORLD_SURFACE, worldX, worldZ);
-        heights[idx] = surfaceY;
 
         mutable.set(worldX, surfaceY, worldZ);
-        BlockState state = findTopBlock(level, mutable, surfaceY);
+        ColumnResult col = scanColumn(level, mutable, surfaceY);
 
-        if (state.isAir()) {
+        int renderedY = col.blockY;
+        heights[idx] = renderedY;
+
+        if (col.isEmpty()) {
           colors[idx] = abgrFromArgb(0xFF000000);
-          prevHeight = surfaceY;
+          prevHeight = renderedY;
           continue;
         }
 
-        int baseRgb = getBlockColor(blockColors, level, mutable, state);
+        mutable.set(worldX, renderedY, worldZ);
+        int baseRgb = getBlockColor(blockColors, level, mutable, col.block);
         if (baseRgb == 0) {
           colors[idx] = abgrFromArgb(0xFF000000);
-          prevHeight = surfaceY;
+          prevHeight = renderedY;
           continue;
         }
 
-        MapColor.Brightness brightness;
-        if (!state.getFluidState().isEmpty()) {
-          brightness = computeWaterBrightness(level, waterProbe, mutable.getY(), worldX, worldZ);
-        } else if (localZ == 0) {
-          brightness = MapColor.Brightness.NORMAL;
+        // Without north neighbor data, prevHeight defaults to 0 which
+        // creates a large delta against renderedY (~64), triggering HIGH.
+        // Force NORMAL to avoid a bright seam on row 0.
+        MapColor.Brightness edgeBrightness;
+        if (localZ == 0 && northNeighbor == null) {
+          edgeBrightness = MapColor.Brightness.NORMAL;
         } else {
-          brightness = computeElevationBrightness(surfaceY, prevHeight, worldX, worldZ);
+          edgeBrightness = computeElevationBrightness(renderedY, prevHeight, worldX, worldZ);
         }
 
-        colors[idx] = abgrFromArgb(applyBrightness(baseRgb, brightness));
-        prevHeight = surfaceY;
+        colors[idx] = abgrFromArgb(
+            shadeColumn(baseRgb, col, renderedY, seaLevel, edgeBrightness,
+                level, mutable, worldX));
+        prevHeight = renderedY;
       }
     }
 
     return new ChunkColorData(colors, heights, gameTick);
   }
 
-  public static void fixBorderShading(
-      ChunkColorData current, ChunkColorData northNeighbor, Level level,
-      ChunkAccess currentChunk) {
+  /**
+   * Applies the full shading pipeline to a scanned column: height-relative
+   * brightness, leaf darkening, edge shading, and water overlay.
+   */
+  private static int shadeColumn(
+      int baseRgb, ColumnResult col, int renderedY, int seaLevel,
+      MapColor.Brightness edgeBrightness, Level level,
+      BlockPos.MutableBlockPos mutable, int worldX) {
 
-    int chunkWorldX = currentChunk.getPos().getMinBlockX();
-    int chunkWorldZ = currentChunk.getPos().getMinBlockZ();
-    BlockPos.MutableBlockPos mutable = new BlockPos.MutableBlockPos();
-    BlockColors blockColors = Minecraft.getInstance().getBlockColors();
-
-    for (int localX = 0; localX < 16; localX++) {
-      int worldX = chunkWorldX + localX;
-      int worldZ = chunkWorldZ;
-
-      int currentHeight = current.getHeight(localX, 0);
-      int northHeight = northNeighbor.getHeight(localX, 15);
-
-      mutable.set(worldX, currentHeight, worldZ);
-      BlockState state = findTopBlock(level, mutable, currentHeight);
-      if (state.isAir()) continue;
-      if (!state.getFluidState().isEmpty()) continue;
-
-      int baseRgb = getBlockColor(blockColors, level, mutable, state);
-      if (baseRgb == 0) continue;
-
-      MapColor.Brightness brightness = computeElevationBrightness(
-          currentHeight, northHeight, worldX, worldZ);
-
-      current.setColor(localX, 0, abgrFromArgb(applyBrightness(baseRgb, brightness)));
+    if (col.isWater()) {
+      // Underwater: skip height modifier (water overlay communicates depth
+      // instead). Apply edge shading to the floor, then blend water on top.
+      int shadedFloor = applyShading(baseRgb, 1.0f, edgeBrightness.modifier);
+      mutable.set(worldX, col.waterSurfaceY, mutable.getZ());
+      int waterTint = level.getBlockTint(mutable, BiomeColors.WATER_COLOR_RESOLVER);
+      return blendWaterColor(shadedFloor, waterTint, col.waterDepth);
     }
 
-    current.setBordersDirty(false);
+    float heightMod = computeHeightModifier(renderedY, seaLevel);
+    if (col.block.getBlock() instanceof LeavesBlock) {
+      heightMod *= LEAF_SHADE;
+    }
+
+    return applyShading(baseRgb, heightMod, edgeBrightness.modifier);
   }
 
-  private static BlockState findTopBlock(
+  /**
+   * Scans a column from the surface downward, tracking water depth and finding
+   * the first meaningful solid block. Pure water blocks increment depth and are
+   * scanned through. Waterlogged blocks like seagrass count as the floor but
+   * are still considered "under water" for tinting purposes.
+   */
+  private static ColumnResult scanColumn(
       Level level, BlockPos.MutableBlockPos mutable, int startY) {
+
+    int waterDepth = 0;
+    int waterSurfaceY = -1;
 
     for (int y = startY; y >= level.getMinBuildHeight(); y--) {
       mutable.setY(y);
@@ -128,21 +188,31 @@ public final class ChunkScanner {
 
       if (state.isAir()) continue;
       if (state.getMapColor(level, mutable) == MapColor.NONE) continue;
-      if (SKIP_BLOCKS.contains(state.getBlock())) continue;
 
-      if (state.getBlock() instanceof CropBlock crop) {
-        if (!crop.isMaxAge(state)) continue;
+      if (state.is(Blocks.WATER)) {
+        if (waterDepth == 0) waterSurfaceY = y;
+        waterDepth++;
+        continue;
       }
 
-      return state;
+      if (SKIP_BLOCKS.contains(state.getBlock())) continue;
+
+      // Waterlogged blocks (seagrass, kelp) are the visible floor under water.
+      // Only water fluid triggers this, not lava or other fluids.
+      if (waterDepth == 0 && state.getFluidState().is(FluidTags.WATER)) {
+        waterSurfaceY = y;
+        waterDepth = 1;
+      }
+
+      return new ColumnResult(state, y, waterDepth, waterSurfaceY);
     }
 
-    return Blocks.AIR.defaultBlockState();
+    return new ColumnResult(Blocks.AIR.defaultBlockState(), startY, waterDepth, waterSurfaceY);
   }
 
   /**
    * Gets the display color for a block using the renderer's {@link BlockColors}
-   * registry for tint accuracy. Tinted blocks get texture × tint multiplication.
+   * registry for tint accuracy. Tinted blocks get texture x tint multiplication.
    */
   private static int getBlockColor(
       BlockColors blockColors, Level level, BlockPos pos, BlockState state) {
@@ -188,51 +258,64 @@ public final class ChunkScanner {
       return 0xFF000000 | (r << 16) | (g << 8) | b;
     }
 
-    // Fallback: darken tint by ~60% to approximate grayscale texture
+    // Approximate grayscale texture at ~60% brightness
     return 0xFF000000
         | ((tintR * 153 / 255) << 16)
         | ((tintG * 153 / 255) << 8)
         | (tintB * 153 / 255);
   }
 
+  /**
+   * Alpha-blends the floor block color with a biome water tint. Deeper water
+   * shows more blue, shallow water lets the floor show through.
+   */
+  private static int blendWaterColor(int floorArgb, int waterTint, int depth) {
+    float alpha = Math.min(WATER_ALPHA_MAX, WATER_ALPHA_BASE + depth * WATER_ALPHA_PER_DEPTH);
+
+    int fR = (floorArgb >> 16) & 0xFF;
+    int fG = (floorArgb >> 8) & 0xFF;
+    int fB = floorArgb & 0xFF;
+
+    int wR = (waterTint >> 16) & 0xFF;
+    int wG = (waterTint >> 8) & 0xFF;
+    int wB = waterTint & 0xFF;
+
+    int r = (int) (fR * (1 - alpha) + wR * alpha);
+    int g = (int) (fG * (1 - alpha) + wG * alpha);
+    int b = (int) (fB * (1 - alpha) + wB * alpha);
+
+    return 0xFF000000 | (r << 16) | (g << 8) | b;
+  }
+
+  private static float computeHeightModifier(int height, int seaLevel) {
+    int delta = height - seaLevel;
+    float mod = 1.0f + delta * HEIGHT_FACTOR;
+    return Math.max(HEIGHT_MOD_MIN, Math.min(HEIGHT_MOD_MAX, mod));
+  }
+
+  /**
+   * Applies height modifier and edge brightness in a single channel pass,
+   * avoiding redundant unpack/repack cycles.
+   */
+  private static int applyShading(int argb, float heightMod, int edgeMod) {
+    float combined = heightMod * edgeMod / 255.0f;
+    int a = (argb >> 24) & 0xFF;
+    int r = Math.min(255, (int) (((argb >> 16) & 0xFF) * combined));
+    int g = Math.min(255, (int) (((argb >> 8) & 0xFF) * combined));
+    int b = Math.min(255, (int) ((argb & 0xFF) * combined));
+    return (a << 24) | (r << 16) | (g << 8) | b;
+  }
+
   private static MapColor.Brightness computeElevationBrightness(
       int currentHeight, int prevHeight, int worldX, int worldZ) {
 
     double d3 = (double) (currentHeight - prevHeight)
-        + (((worldX + worldZ) & 1) - 0.5) * 0.4;
+        + (((worldX + worldZ) & 1) - 0.5) * DITHER_AMPLITUDE;
 
-    if (d3 > 0.6) return MapColor.Brightness.HIGH;
-    if (d3 < -0.6) return MapColor.Brightness.LOW;
+    if (d3 > EDGE_THRESH_HIGH) return MapColor.Brightness.HIGH;
+    if (d3 < EDGE_THRESH_LOWEST) return MapColor.Brightness.LOWEST;
+    if (d3 < EDGE_THRESH_LOW) return MapColor.Brightness.LOW;
     return MapColor.Brightness.NORMAL;
-  }
-
-  /** Reuses the provided probe to avoid per-column allocation. */
-  private static MapColor.Brightness computeWaterBrightness(
-      Level level, BlockPos.MutableBlockPos probe,
-      int surfaceY, int worldX, int worldZ) {
-
-    int depth = 0;
-    probe.set(worldX, surfaceY - 1, worldZ);
-    while (depth < 10 && probe.getY() >= level.getMinBuildHeight()) {
-      if (level.getBlockState(probe).getFluidState().isEmpty()) break;
-      depth++;
-      probe.setY(probe.getY() - 1);
-    }
-
-    double d2 = depth * 0.1 + ((worldX + worldZ) & 1) * 0.2;
-
-    if (d2 < 0.5) return MapColor.Brightness.HIGH;
-    if (d2 > 0.9) return MapColor.Brightness.LOW;
-    return MapColor.Brightness.NORMAL;
-  }
-
-  private static int applyBrightness(int argb, MapColor.Brightness brightness) {
-    int mod = brightness.modifier;
-    int a = (argb >> 24) & 0xFF;
-    int r = ((argb >> 16) & 0xFF) * mod / 255;
-    int g = ((argb >> 8) & 0xFF) * mod / 255;
-    int b = (argb & 0xFF) * mod / 255;
-    return (a << 24) | (r << 16) | (g << 8) | b;
   }
 
   static int abgrFromArgb(int argb) {

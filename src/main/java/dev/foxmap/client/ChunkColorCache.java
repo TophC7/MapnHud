@@ -85,25 +85,18 @@ public class ChunkColorCache {
         }
       }
 
-      ChunkColorData data = ChunkScanner.scan(chunk, level, level.getGameTime());
       int cx = chunk.getPos().x;
       int cz = chunk.getPos().z;
+
+      // Pass north neighbor so row 0 gets correct edge shading immediately
+      ChunkColorData northData = get(cx, cz - 1);
+      ChunkColorData data = ChunkScanner.scan(chunk, level, level.getGameTime(), northData);
       cache.put(ChunkPos.asLong(cx, cz), data);
       dirty = true;
 
-      // Fix border shading with neighbors
-      ChunkColorData northData = cache.get(ChunkPos.asLong(cx, cz - 1));
-      if (northData != null) {
-        ChunkScanner.fixBorderShading(data, northData, level, chunk);
-      }
-
-      ChunkColorData southData = cache.get(ChunkPos.asLong(cx, cz + 1));
-      if (southData != null && southData.isBordersDirty()) {
-        if (level.hasChunk(cx, cz + 1)) {
-          ChunkAccess southChunk = level.getChunk(cx, cz + 1);
-          ChunkScanner.fixBorderShading(southData, data, level, southChunk);
-        }
-      }
+      // The south neighbor's row 0 depends on this chunk's row 15 heights.
+      // It self-corrects on the periodic rescan timer rather than being
+      // re-enqueued here, which would cascade and clog the scan queue.
 
       processed++;
     }
@@ -113,8 +106,15 @@ public class ChunkColorCache {
     int chunkX = playerPos.getX() >> 4;
     int chunkZ = playerPos.getZ() >> 4;
 
-    if (tickCounter % RESCAN_PLAYER_CHUNK_INTERVAL == 0) {
-      enqueueRescan(level, chunkX, chunkZ);
+    // Player chunk scans immediately, bypassing the queue so block
+    // changes are always visible within one rescan interval.
+    if (tickCounter % RESCAN_PLAYER_CHUNK_INTERVAL == 0
+        && level.hasChunk(chunkX, chunkZ)) {
+      ChunkAccess chunk = level.getChunk(chunkX, chunkZ);
+      ChunkColorData northData = get(chunkX, chunkZ - 1);
+      ChunkColorData data = ChunkScanner.scan(chunk, level, level.getGameTime(), northData);
+      cache.put(ChunkPos.asLong(chunkX, chunkZ), data);
+      dirty = true;
     }
 
     if (tickCounter % RESCAN_ADJACENT_INTERVAL == 0) {

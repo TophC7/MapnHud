@@ -42,8 +42,8 @@ public class MinimapLayer {
   /** Padding from screen edge. */
   private static final int MARGIN = 8;
 
-  /** Half the map size in blocks, used for dot clamping. */
-  private static final int HALF_BLOCKS = MinimapAssembler.MAP_SIZE / 2;
+  /** Half the map pixel count, used as a base for dot clamping with scale. */
+  private static final int HALF_MAP = MinimapAssembler.MAP_SIZE / 2;
 
   private static final MinimapRenderer renderer = new MinimapRenderer();
 
@@ -63,9 +63,12 @@ public class MinimapLayer {
 
     if (mc.options.hideGui || mc.getDebugOverlay().showDebugScreen()) return;
 
-    // Dynamic display size from keybind zoom
+    // Display size and zoom scale
     int displaySize = MinimapKeybinds.getDisplaySize();
-    float pixelScale = (float) displaySize / MinimapAssembler.MAP_SIZE;
+    int scale = MinimapKeybinds.getScale();
+
+    // Screen pixels per world block, accounting for zoom
+    float pixelScale = (float) displaySize / (MinimapAssembler.MAP_SIZE * scale);
 
     // Interpolated position for smooth scrolling
     float partialTick = delta.getGameTimeDeltaPartialTick(false);
@@ -74,7 +77,7 @@ public class MinimapLayer {
 
     ChunkColorCache cache = ChunkCacheEventHandler.getCache();
     boolean cacheUpdated = ChunkCacheEventHandler.consumeDirty();
-    ResourceLocation texId = renderer.update(playerX, playerZ, cache, cacheUpdated);
+    ResourceLocation texId = renderer.update(playerX, playerZ, cache, cacheUpdated, scale);
     if (texId == null) return;
 
     int screenW = graphics.guiWidth();
@@ -103,8 +106,8 @@ public class MinimapLayer {
     graphics.pose().mulPose(Axis.ZP.rotationDegrees(-rotation));
 
     // Scale by sqrt(2) so rotated square always fills the display
-    float scale = 1.42f;
-    graphics.pose().scale(scale, scale, 1.0f);
+    float rotScale = 1.42f;
+    graphics.pose().scale(rotScale, rotScale, 1.0f);
 
     // Apply smooth scroll offset, then center the quad
     graphics.pose().translate(
@@ -128,7 +131,8 @@ public class MinimapLayer {
     RenderSystem.disableBlend();
 
     // -- Player dots (inside the rotated pose stack so they rotate with the map) --
-    renderPlayerDots(graphics, mc, player, playerX, playerZ, displaySize, pixelScale);
+    int halfBlocks = HALF_MAP * scale;
+    renderPlayerDots(graphics, mc, player, playerX, playerZ, displaySize, pixelScale, halfBlocks);
 
     graphics.pose().popPose();
     graphics.disableScissor();
@@ -158,7 +162,8 @@ public class MinimapLayer {
    */
   private static void renderPlayerDots(
       GuiGraphics graphics, Minecraft mc, LocalPlayer localPlayer,
-      double playerX, double playerZ, int displaySize, float pixelScale) {
+      double playerX, double playerZ, int displaySize, float pixelScale,
+      int halfBlocks) {
 
     float halfDisplay = displaySize / 2.0f;
 
@@ -171,10 +176,10 @@ public class MinimapLayer {
 
       // Clamp to map edge if beyond visible area
       boolean clamped = false;
-      if (dist > HALF_BLOCKS) {
+      if (dist > halfBlocks) {
         double angle = Math.atan2(dz, dx);
-        dx = Math.cos(angle) * (HALF_BLOCKS - 2);
-        dz = Math.sin(angle) * (HALF_BLOCKS - 2);
+        dx = Math.cos(angle) * (halfBlocks - 2);
+        dz = Math.sin(angle) * (halfBlocks - 2);
         clamped = true;
       }
 
@@ -187,7 +192,7 @@ public class MinimapLayer {
       if (clamped) {
         alpha = 100;
       } else {
-        alpha = 255 - (int) ((dist / HALF_BLOCKS) * 155);
+        alpha = 255 - (int) ((dist / halfBlocks) * 155);
         alpha = Math.max(100, Math.min(255, alpha));
       }
 

@@ -3,14 +3,13 @@ package dev.foxmap.client;
 import com.mojang.blaze3d.platform.NativeImage;
 
 /**
- * Composites the visible 128×128 pixel region from cached chunk color grids.
+ * Composites the visible 128x128 pixel region from cached chunk color grids.
  *
- * <p>Each frame, determines which chunks overlap the viewport centered on the
- * player's integer block position, then copies the relevant pixels from each
- * chunk's pre-computed ABGR color array directly into the {@link NativeImage}.
+ * <p>Supports a scale factor for zoom: at scale 1, each pixel maps to one block
+ * (128 blocks visible). At scale 2, each pixel samples every 2nd block (256
+ * blocks visible), and so on.
  *
- * <p>Uncached chunks (not yet scanned) are rendered as dark gray placeholders.
- * This produces a natural "map fills in" effect on world load.
+ * <p>Uncached chunks are rendered as dark gray placeholders.
  */
 public class MinimapAssembler {
 
@@ -23,52 +22,48 @@ public class MinimapAssembler {
   /**
    * Assemble the visible area into the given image.
    *
-   * @param image     128×128 NativeImage to write into (ABGR format)
+   * @param image     128x128 NativeImage to write into (ABGR format)
    * @param cache     the chunk color cache
-   * @param centerX   player's block X (integer, not interpolated since smooth
-   *                  scrolling is handled by the renderer via quad offset)
+   * @param centerX   player's block X
    * @param centerZ   player's block Z
+   * @param scale     blocks per pixel (1 = normal, 2 = zoomed out 2x, etc.)
    */
-  public void assemble(NativeImage image, ChunkColorCache cache, int centerX, int centerZ) {
-    // World-space bounding box of the visible area
-    int minWorldX = centerX - HALF;
-    int minWorldZ = centerZ - HALF;
+  public void assemble(
+      NativeImage image, ChunkColorCache cache,
+      int centerX, int centerZ, int scale) {
 
-    // Which chunks overlap the viewport
-    int minChunkX = minWorldX >> 4;
-    int maxChunkX = (minWorldX + MAP_SIZE - 1) >> 4;
-    int minChunkZ = minWorldZ >> 4;
-    int maxChunkZ = (minWorldZ + MAP_SIZE - 1) >> 4;
+    int halfWorld = HALF * scale;
+    int minWorldX = centerX - halfWorld;
+    int minWorldZ = centerZ - halfWorld;
 
-    for (int cx = minChunkX; cx <= maxChunkX; cx++) {
-      for (int cz = minChunkZ; cz <= maxChunkZ; cz++) {
-        ChunkColorData data = cache.get(cx, cz);
-        int chunkWorldX = cx << 4;
-        int chunkWorldZ = cz << 4;
+    // Track last chunk to avoid redundant cache lookups.
+    // The inner Z loop often stays within the same chunk.
+    int lastCx = Integer.MIN_VALUE;
+    int lastCz = Integer.MIN_VALUE;
+    ChunkColorData lastData = null;
 
-        // Overlap between this chunk's 16×16 area and the viewport
-        int overlapStartX = Math.max(chunkWorldX, minWorldX);
-        int overlapEndX = Math.min(chunkWorldX + 16, minWorldX + MAP_SIZE);
-        int overlapStartZ = Math.max(chunkWorldZ, minWorldZ);
-        int overlapEndZ = Math.min(chunkWorldZ + 16, minWorldZ + MAP_SIZE);
+    for (int px = 0; px < MAP_SIZE; px++) {
+      int wx = minWorldX + px * scale;
+      int cx = wx >> 4;
 
-        for (int wx = overlapStartX; wx < overlapEndX; wx++) {
-          for (int wz = overlapStartZ; wz < overlapEndZ; wz++) {
-            int pixelX = wx - minWorldX;
-            int pixelZ = wz - minWorldZ;
+      for (int pz = 0; pz < MAP_SIZE; pz++) {
+        int wz = minWorldZ + pz * scale;
+        int cz = wz >> 4;
 
-            int color;
-            if (data != null) {
-              int localX = wx - chunkWorldX;
-              int localZ = wz - chunkWorldZ;
-              color = data.getColor(localX, localZ);
-            } else {
-              color = PLACEHOLDER;
-            }
-
-            image.setPixelRGBA(pixelX, pixelZ, color);
-          }
+        if (cx != lastCx || cz != lastCz) {
+          lastData = cache.get(cx, cz);
+          lastCx = cx;
+          lastCz = cz;
         }
+
+        int color;
+        if (lastData != null) {
+          color = lastData.getColor(wx & 15, wz & 15);
+        } else {
+          color = PLACEHOLDER;
+        }
+
+        image.setPixelRGBA(px, pz, color);
       }
     }
   }
