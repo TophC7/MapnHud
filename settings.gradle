@@ -11,3 +11,6 @@ plugins {
 }
 
 rootProject.name = 'mapnhud'
+
+// Composite build: resolve KwahsCore from source (no publishToMavenLocal needed)
+includeBuild('../KwahsCore')
