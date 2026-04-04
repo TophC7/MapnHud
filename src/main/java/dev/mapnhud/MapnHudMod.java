@@ -19,13 +19,13 @@ public class MapnHudMod {
   public static final Logger LOG = LoggerFactory.getLogger(MOD_ID);
 
   public MapnHudMod(IEventBus modBus, ModContainer container) {
-    LOG.info("Fox Map loading");
+    LOG.info("Kwah's Map n Hud loading");
 
     if (FMLEnvironment.dist.isClient()) {
       container.registerConfig(ModConfig.Type.CLIENT, MapnHudConfig.SPEC);
       container.registerExtensionPoint(
           IConfigScreenFactory.class,
-          (mc, parent) -> new MapnHudConfigScreen(parent));
+          (mc, parent) -> MapnHudConfigScreen.create(parent));
       modBus.addListener(MapnHudMod::onRegisterKeys);
     }
   }
