@@ -5,7 +5,7 @@ import net.minecraft.client.Minecraft;
 /**
  * Shows the current FPS.
  */
-public class FpsProvider implements InfoProvider {
+public final class FpsProvider implements InfoProvider {
 
   @Override public String id() { return "fps"; }
   @Override public String displayName() { return "FPS"; }

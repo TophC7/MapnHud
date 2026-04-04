@@ -1,4 +1,4 @@
-package dev.mapnhud.client;
+package dev.mapnhud.client.map;
 
 import dev.mapnhud.MapnHudMod;
 import net.minecraft.client.Minecraft;
@@ -14,7 +14,7 @@ import net.neoforged.neoforge.event.level.LevelEvent;
  * Routes NeoForge chunk and level events to {@link ChunkColorCache}.
  */
 @EventBusSubscriber(modid = MapnHudMod.MOD_ID, value = Dist.CLIENT)
-public class ChunkCacheEventHandler {
+public final class ChunkCacheEventHandler {
 
   private static final ChunkColorCache CACHE = new ChunkColorCache();
   private static boolean cacheUpdatedThisTick = false;

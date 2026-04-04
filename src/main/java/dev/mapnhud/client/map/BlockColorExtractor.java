@@ -1,4 +1,4 @@
-package dev.mapnhud.client;
+package dev.mapnhud.client.map;
 
 import dev.mapnhud.MapnHudMod;
 import java.util.HashMap;

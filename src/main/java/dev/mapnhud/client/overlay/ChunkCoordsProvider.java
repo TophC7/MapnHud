@@ -5,7 +5,7 @@ import net.minecraft.client.Minecraft;
 /**
  * Shows the player's chunk coordinates.
  */
-public class ChunkCoordsProvider implements InfoProvider {
+public final class ChunkCoordsProvider implements InfoProvider {
 
   @Override public String id() { return "chunk"; }
   @Override public String displayName() { return "Chunk Coords"; }

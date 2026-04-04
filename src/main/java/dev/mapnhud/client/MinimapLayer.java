@@ -9,6 +9,8 @@ import com.mojang.blaze3d.vertex.VertexFormat;
 import com.mojang.math.Axis;
 import dev.mapnhud.MapnHudMod;
 import dev.mapnhud.client.MapnHudConfig;
+import dev.mapnhud.client.map.ChunkCacheEventHandler;
+import dev.mapnhud.client.map.ChunkColorCache;
 import dev.mapnhud.client.overlay.InfoOverlayRenderer;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.Minecraft;
@@ -41,7 +43,7 @@ import org.joml.Matrix4f;
  * </ul>
  */
 @EventBusSubscriber(modid = MapnHudMod.MOD_ID, value = Dist.CLIENT)
-public class MinimapLayer {
+public final class MinimapLayer {
 
   /** Padding from screen edge. */
   private static final int MARGIN = 8;

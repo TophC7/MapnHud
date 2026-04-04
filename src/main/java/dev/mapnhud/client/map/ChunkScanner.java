@@ -1,4 +1,4 @@
-package dev.mapnhud.client;
+package dev.mapnhud.client.map;
 
 import java.util.Set;
 import net.minecraft.client.Minecraft;
@@ -318,7 +318,7 @@ public final class ChunkScanner {
     return MapColor.Brightness.NORMAL;
   }
 
-  static int abgrFromArgb(int argb) {
+  public static int abgrFromArgb(int argb) {
     int a = (argb >> 24) & 0xFF;
     int r = (argb >> 16) & 0xFF;
     int g = (argb >> 8) & 0xFF;

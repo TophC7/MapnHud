@@ -1,4 +1,4 @@
-package dev.mapnhud.client;
+package dev.mapnhud.client.map;
 
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import java.util.ArrayDeque;
@@ -19,7 +19,7 @@ import net.minecraft.world.level.chunk.LevelChunk;
  * <p>Uses {@code Long2ObjectOpenHashMap} (fastutil, shipped with Minecraft) to
  * avoid ChunkPos allocation on every cache lookup.
  */
-public class ChunkColorCache {
+public final class ChunkColorCache {
 
   private static final int CHUNKS_PER_TICK = 2;
   private static final int RESCAN_PLAYER_CHUNK_INTERVAL = 40;

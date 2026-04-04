@@ -49,19 +49,43 @@ import xyz.kwahson.core.config.SafeConfig;
 @EventBusSubscriber(modid = MapnHudMod.MOD_ID, value = Dist.CLIENT)
 public final class BlockTooltipRenderer {
 
+  // -- Resolved target data (rebuilt only on target change) --
+
+  /**
+   * Immutable snapshot of what the tooltip should display. Built once when the
+   * player starts looking at a new block/entity/fluid, then read every frame.
+   */
+  private record TooltipTarget(
+      Component name,
+      Component modName,
+      ItemStack icon,
+      boolean hasItemIcon,
+      LivingEntity livingEntity
+  ) {}
+
+  // -- Pre-computed hearts state (rebuilt per tick, read per frame) --
+
+  /**
+   * Pre-formatted heart display data. Rebuilt every tick from the living
+   * target's health so the render path does zero allocation.
+   */
+  private record HeartsCache(
+      String fullHeartsStr,
+      boolean halfHeart,
+      boolean compact,
+      String compactStr
+  ) {
+    static final HeartsCache NONE = new HeartsCache("", false, false, "");
+
+    boolean visible() {
+      return !fullHeartsStr.isEmpty() || halfHeart;
+    }
+  }
+
+  // -- Constants --
+
   private static final ResourceLocation LAYER_ID =
       ResourceLocation.fromNamespaceAndPath(MapnHudMod.MOD_ID, "block_tooltip");
-
-  @SubscribeEvent
-  public static void registerLayer(RegisterGuiLayersEvent event) {
-    event.registerAbove(VanillaGuiLayers.CROSSHAIR, LAYER_ID,
-        BlockTooltipRenderer::render);
-  }
-
-  @SubscribeEvent
-  public static void onClientTick(ClientTickEvent.Post event) {
-    tick(Minecraft.getInstance());
-  }
 
   // Timing
   private static final int STARE_DELAY_TICKS = 10;
@@ -82,31 +106,22 @@ public final class BlockTooltipRenderer {
   private static final int HALF_HEART_COLOR = 0x880000;
   private static final int MOD_NAME_COLOR = 0x5555FF;
 
-  // Config cache
+  // -- Mutable state --
+
+  // Config cache (read per tick)
   private static boolean enabled = true;
   private static TooltipPosition position = TooltipPosition.TOP_CENTER;
 
-  // Target identity (for change detection)
+  // Target identity (for same-target detection only)
   private static Block currentBlock;
   private static Entity currentEntity;
   private static Fluid currentFluid;
 
-  // Target display data (rebuilt on target change)
-  private static Component targetName;
-  private static Component modNameComponent;
-  private static ItemStack targetIcon = ItemStack.EMPTY;
-  private static boolean hasItemIcon;
-  private static LivingEntity livingTarget;
+  // Resolved display data
+  private static TooltipTarget target;
   private static float targetHealth = -1;
   private static float targetMaxHealth = -1;
-
-  // Hearts cache (pre-built per tick, read in render)
-  private static String cachedFullHeartsStr = "";
-  private static boolean cachedHalfHeart;
-  private static boolean cachedCompactHearts;
-  private static String cachedCompactStr = "";
-  private static boolean cachedShowHearts;
-  private static int cachedHeartCharW = -1;
+  private static HeartsCache hearts = HeartsCache.NONE;
 
   // Stare + fade
   private static int stareTickCount;
@@ -120,9 +135,25 @@ public final class BlockTooltipRenderer {
 
   // Caches
   private static final Map<String, Component> modNameCache = new HashMap<>();
+  private static int cachedHeartCharW = -1;
   private static boolean entityRenderWarned;
 
   private BlockTooltipRenderer() {}
+
+  // -- Event wiring --
+
+  @SubscribeEvent
+  public static void registerLayer(RegisterGuiLayersEvent event) {
+    event.registerAbove(VanillaGuiLayers.CROSSHAIR, LAYER_ID,
+        BlockTooltipRenderer::render);
+  }
+
+  @SubscribeEvent
+  public static void onClientTick(ClientTickEvent.Post event) {
+    tick(Minecraft.getInstance());
+  }
+
+  // -- Tick --
 
   private static void tick(Minecraft mc) {
     if (!compatChecked) {
@@ -143,41 +174,46 @@ public final class BlockTooltipRenderer {
     resolveTarget(mc);
 
     // Health updates every tick for living entities
-    if (livingTarget != null && livingTarget.isAlive()) {
-      targetHealth = livingTarget.getHealth();
-      targetMaxHealth = livingTarget.getMaxHealth();
+    if (target != null && target.livingEntity != null && target.livingEntity.isAlive()) {
+      targetHealth = target.livingEntity.getHealth();
+      targetMaxHealth = target.livingEntity.getMaxHealth();
     }
 
     updateFade();
-    refreshHeartsCache(mc);
+    hearts = refreshHeartsCache(mc);
   }
+
+  // -- Render --
 
   private static void render(GuiGraphics graphics, DeltaTracker delta) {
     float alpha = computeAlpha(delta);
     if (alpha <= 0.01f) return;
-    if (targetName == null) return;
+
+    TooltipTarget t = target;
+    if (t == null) return;
 
     Minecraft mc = Minecraft.getInstance();
     if (mc.options.hideGui || mc.getDebugOverlay().showDebugScreen()) return;
 
     Font font = mc.font;
-    boolean hasIcon = hasItemIcon || livingTarget != null;
-    int iconSize = livingTarget != null ? ENTITY_ICON_SIZE : ITEM_ICON_SIZE;
+    boolean hasIcon = t.hasItemIcon || t.livingEntity != null;
+    int iconSize = t.livingEntity != null ? ENTITY_ICON_SIZE : ITEM_ICON_SIZE;
     int iconSpace = hasIcon ? iconSize + ICON_TEXT_GAP : 0;
 
     // Text line widths
-    int nameWidth = font.width(targetName);
-    int modWidth = modNameComponent != null ? font.width(modNameComponent) : 0;
+    int nameWidth = font.width(t.name);
+    int modWidth = t.modName != null ? font.width(t.modName) : 0;
     int textContentWidth = Math.max(nameWidth, modWidth);
 
     // Hearts width from tick-cached data
+    HeartsCache h = hearts;
     int heartsWidth = 0;
-    if (cachedShowHearts) {
-      if (cachedCompactHearts) {
-        heartsWidth = font.width(cachedCompactStr);
+    if (h.visible()) {
+      if (h.compact) {
+        heartsWidth = font.width(h.compactStr);
       } else {
         int heartW = heartCharWidth(font);
-        heartsWidth = heartW * (cachedFullHeartsStr.length() + (cachedHalfHeart ? 1 : 0));
+        heartsWidth = heartW * (h.fullHeartsStr.length() + (h.halfHeart ? 1 : 0));
       }
     }
 
@@ -186,8 +222,8 @@ public final class BlockTooltipRenderer {
     int tooltipWidth = contentWidth + BG_PADDING_H * 2;
 
     int lineCount = 1;
-    if (modNameComponent != null) lineCount++;
-    if (cachedShowHearts) lineCount++;
+    if (t.modName != null) lineCount++;
+    if (h.visible()) lineCount++;
     int textBlockHeight = lineCount * font.lineHeight + (lineCount - 1) * LINE_GAP;
     int innerHeight = Math.max(hasIcon ? iconSize : 0, textBlockHeight);
     int tooltipHeight = innerHeight + BG_PADDING_V * 2;
@@ -220,10 +256,10 @@ public final class BlockTooltipRenderer {
     int iconX = tooltipX + BG_PADDING_H;
     int iconY = tooltipY + BG_PADDING_V + (innerHeight - iconSize) / 2;
     if (hasIcon && alpha > 0.3f) {
-      if (livingTarget != null) {
-        renderEntityIcon(graphics, livingTarget, iconX, iconY, iconSize);
-      } else if (hasItemIcon && !targetIcon.isEmpty()) {
-        graphics.renderItem(targetIcon, iconX, iconY);
+      if (t.livingEntity != null) {
+        renderEntityIcon(graphics, t.livingEntity, iconX, iconY, iconSize);
+      } else if (t.hasItemIcon && !t.icon.isEmpty()) {
+        graphics.renderItem(t.icon, iconX, iconY);
       }
     }
 
@@ -232,17 +268,17 @@ public final class BlockTooltipRenderer {
     int textStartY = tooltipY + BG_PADDING_V + (innerHeight - textBlockHeight) / 2;
     int lineY = textStartY;
 
-    graphics.drawString(font, targetName, textX, lineY, withAlpha(0xFFFFFF, textAlpha), true);
+    graphics.drawString(font, t.name, textX, lineY, withAlpha(0xFFFFFF, textAlpha), true);
     lineY += font.lineHeight + LINE_GAP;
 
-    if (modNameComponent != null) {
-      graphics.drawString(font, modNameComponent, textX, lineY,
+    if (t.modName != null) {
+      graphics.drawString(font, t.modName, textX, lineY,
           withAlpha(MOD_NAME_COLOR, textAlpha), true);
       lineY += font.lineHeight + LINE_GAP;
     }
 
-    if (cachedShowHearts) {
-      renderHearts(graphics, font, textX, lineY, textAlpha);
+    if (h.visible()) {
+      renderHearts(graphics, font, h, textX, lineY, textAlpha);
     }
   }
 
@@ -293,15 +329,16 @@ public final class BlockTooltipRenderer {
 
     currentEntity = null;
     currentFluid = null;
-    livingTarget = null;
-    targetHealth = -1;
-    targetMaxHealth = -1;
     currentBlock = block;
 
-    targetName = block.getName();
-    targetIcon = new ItemStack(block.asItem());
-    hasItemIcon = !targetIcon.isEmpty() && targetIcon.getItem() != Items.AIR;
-    modNameComponent = lookupModName(BuiltInRegistries.BLOCK.getKey(block).getNamespace());
+    ItemStack icon = new ItemStack(block.asItem());
+    boolean hasIcon = !icon.isEmpty() && icon.getItem() != Items.AIR;
+    target = new TooltipTarget(
+        block.getName(),
+        lookupModName(BuiltInRegistries.BLOCK.getKey(block).getNamespace()),
+        icon, hasIcon, null);
+    targetHealth = -1;
+    targetMaxHealth = -1;
 
     resetStare();
   }
@@ -317,31 +354,24 @@ public final class BlockTooltipRenderer {
     currentFluid = null;
     currentEntity = entity;
 
-    targetName = entity.getDisplayName();
+    Component name = entity.getDisplayName();
+    Component modName = lookupModName(
+        BuiltInRegistries.ENTITY_TYPE.getKey(entity.getType()).getNamespace());
 
     if (entity instanceof ItemEntity itemEntity) {
-      targetIcon = itemEntity.getItem().copy();
-      hasItemIcon = !targetIcon.isEmpty();
-      livingTarget = null;
+      ItemStack icon = itemEntity.getItem().copy();
+      target = new TooltipTarget(name, modName, icon, !icon.isEmpty(), null);
+      targetHealth = -1;
+      targetMaxHealth = -1;
     } else if (entity instanceof LivingEntity living) {
-      targetIcon = ItemStack.EMPTY;
-      hasItemIcon = false;
-      livingTarget = living;
+      target = new TooltipTarget(name, modName, ItemStack.EMPTY, false, living);
       targetHealth = living.getHealth();
       targetMaxHealth = living.getMaxHealth();
     } else {
-      targetIcon = ItemStack.EMPTY;
-      hasItemIcon = false;
-      livingTarget = null;
-    }
-
-    if (livingTarget == null) {
+      target = new TooltipTarget(name, modName, ItemStack.EMPTY, false, null);
       targetHealth = -1;
       targetMaxHealth = -1;
     }
-
-    modNameComponent = lookupModName(
-        BuiltInRegistries.ENTITY_TYPE.getKey(entity.getType()).getNamespace());
 
     resetStare();
   }
@@ -356,16 +386,15 @@ public final class BlockTooltipRenderer {
 
     currentBlock = null;
     currentEntity = null;
-    livingTarget = null;
-    targetHealth = -1;
-    targetMaxHealth = -1;
     currentFluid = fluidType;
 
     ResourceLocation fluidId = BuiltInRegistries.FLUID.getKey(fluidType);
-    targetName = Component.literal(FormatUtil.titleCase(fluidId));
-    targetIcon = ItemStack.EMPTY;
-    hasItemIcon = false;
-    modNameComponent = lookupModName(fluidId.getNamespace());
+    target = new TooltipTarget(
+        Component.literal(FormatUtil.titleCase(fluidId)),
+        lookupModName(fluidId.getNamespace()),
+        ItemStack.EMPTY, false, null);
+    targetHealth = -1;
+    targetMaxHealth = -1;
 
     resetStare();
   }
@@ -374,14 +403,10 @@ public final class BlockTooltipRenderer {
     currentBlock = null;
     currentEntity = null;
     currentFluid = null;
-    livingTarget = null;
-    targetName = null;
-    modNameComponent = null;
-    targetIcon = ItemStack.EMPTY;
-    hasItemIcon = false;
+    target = null;
     targetHealth = -1;
     targetMaxHealth = -1;
-    cachedShowHearts = false;
+    hearts = HeartsCache.NONE;
     fadeIn = false;
     stareTickCount = 0;
   }
@@ -411,7 +436,7 @@ public final class BlockTooltipRenderer {
     });
   }
 
-  // -- Fade (float-based, no discontinuity between in/out speeds) --
+  // -- Fade --
 
   private static void updateFade() {
     prevFadeAlpha = fadeAlpha;
@@ -428,39 +453,35 @@ public final class BlockTooltipRenderer {
     return prevFadeAlpha + (fadeAlpha - prevFadeAlpha) * pt;
   }
 
-  // -- Hearts (pre-built per tick, rendered per frame with no allocations) --
+  // -- Hearts --
 
-  private static void refreshHeartsCache(Minecraft mc) {
+  private static HeartsCache refreshHeartsCache(Minecraft mc) {
     if (targetHealth <= 0 || targetMaxHealth <= 0) {
-      cachedShowHearts = false;
-      return;
+      return HeartsCache.NONE;
     }
 
     int halfHeartUnits = (int) Math.ceil(targetHealth);
     int full = halfHeartUnits / 2;
     boolean half = halfHeartUnits % 2 == 1;
-    cachedShowHearts = full > 0 || half;
+    if (full <= 0 && !half) return HeartsCache.NONE;
 
-    if (!cachedShowHearts) return;
-
-    cachedFullHeartsStr = full > 0 ? "\u2764".repeat(full) : "";
-    cachedHalfHeart = half;
+    String fullStr = full > 0 ? "\u2764".repeat(full) : "";
 
     // Check if hearts fit within a reasonable width
+    TooltipTarget t = target;
     Font font = mc.font;
     int heartW = heartCharWidth(font);
-    int nameWidth = targetName != null ? font.width(targetName) : 0;
-    int modWidth = modNameComponent != null ? font.width(modNameComponent) : 0;
+    int nameWidth = t != null ? font.width(t.name) : 0;
+    int modWidth = t != null && t.modName != null ? font.width(t.modName) : 0;
     int textContentWidth = Math.max(nameWidth, modWidth);
     int idealWidth = heartW * (full + (half ? 1 : 0));
 
     if (idealWidth > textContentWidth && textContentWidth > 0) {
-      cachedCompactHearts = true;
-      cachedCompactStr = "\u2764 " + (int) targetHealth + "/" + (int) targetMaxHealth;
-    } else {
-      cachedCompactHearts = false;
-      cachedCompactStr = "";
+      String compactStr = "\u2764 " + (int) targetHealth + "/" + (int) targetMaxHealth;
+      return new HeartsCache(fullStr, half, true, compactStr);
     }
+
+    return new HeartsCache(fullStr, half, false, "");
   }
 
   private static int heartCharWidth(Font font) {
@@ -470,22 +491,22 @@ public final class BlockTooltipRenderer {
     return cachedHeartCharW;
   }
 
-  private static void renderHearts(GuiGraphics graphics, Font font,
+  private static void renderHearts(GuiGraphics graphics, Font font, HeartsCache h,
                                     int x, int y, int textAlpha) {
     int fullColor = withAlpha(HEART_COLOR, textAlpha);
 
-    if (cachedCompactHearts) {
-      graphics.drawString(font, cachedCompactStr, x, y, fullColor, true);
+    if (h.compact) {
+      graphics.drawString(font, h.compactStr, x, y, fullColor, true);
       return;
     }
 
     int hx = x;
-    if (!cachedFullHeartsStr.isEmpty()) {
-      graphics.drawString(font, cachedFullHeartsStr, hx, y, fullColor, true);
-      hx += font.width(cachedFullHeartsStr);
+    if (!h.fullHeartsStr.isEmpty()) {
+      graphics.drawString(font, h.fullHeartsStr, hx, y, fullColor, true);
+      hx += font.width(h.fullHeartsStr);
     }
 
-    if (cachedHalfHeart) {
+    if (h.halfHeart) {
       graphics.drawString(font, "\u2764", hx, y, withAlpha(HALF_HEART_COLOR, textAlpha), true);
     }
   }
@@ -530,7 +551,6 @@ public final class BlockTooltipRenderer {
           (float) (x + size * 5), (float) (y + size / 2),
           entity
       );
-      entityRenderWarned = false;
     } catch (Exception e) {
       if (!entityRenderWarned) {
         entityRenderWarned = true;

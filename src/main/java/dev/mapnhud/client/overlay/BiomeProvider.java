@@ -8,7 +8,7 @@ import net.minecraft.world.level.biome.Biome;
 /**
  * Shows the current biome name, formatted from the resource location.
  */
-public class BiomeProvider implements InfoProvider {
+public final class BiomeProvider implements InfoProvider {
 
   @Override public String id() { return "biome"; }
   @Override public String displayName() { return "Biome"; }

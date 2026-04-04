@@ -6,7 +6,7 @@ import net.minecraft.resources.ResourceLocation;
 /**
  * Shows the current dimension name.
  */
-public class DimensionProvider implements InfoProvider {
+public final class DimensionProvider implements InfoProvider {
 
   @Override public String id() { return "dimension"; }
   @Override public String displayName() { return "Dimension"; }

@@ -7,7 +7,7 @@ import xyz.kwahson.core.config.SafeConfig;
 /**
  * Shows the player's block coordinates. Optionally includes Y.
  */
-public class CoordinatesProvider implements InfoProvider {
+public final class CoordinatesProvider implements InfoProvider {
 
   @Override public String id() { return "coordinates"; }
   @Override public String displayName() { return "Coordinates"; }

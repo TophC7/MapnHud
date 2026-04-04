@@ -1,6 +1,9 @@
 package dev.mapnhud.client;
 
 import com.mojang.blaze3d.platform.NativeImage;
+import dev.mapnhud.client.map.ChunkColorCache;
+import dev.mapnhud.client.map.ChunkColorData;
+import dev.mapnhud.client.map.ChunkScanner;
 
 /**
  * Composites the visible pixel region from cached chunk color grids.

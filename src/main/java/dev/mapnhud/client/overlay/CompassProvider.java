@@ -6,7 +6,7 @@ import net.minecraft.util.Mth;
 /**
  * Shows the player's facing direction as a cardinal heading.
  */
-public class CompassProvider implements InfoProvider {
+public final class CompassProvider implements InfoProvider {
 
   private static final String[] CARDINALS = {
       "S", "SW", "W", "NW", "N", "NE", "E", "SE"

@@ -8,7 +8,7 @@ import xyz.kwahson.core.config.SafeConfig;
  * Shows the current time. Can display in-game time or real time,
  * in 12h or 24h format.
  */
-public class TimeProvider implements InfoProvider {
+public final class TimeProvider implements InfoProvider {
 
   @Override public String id() { return "time"; }
   @Override public String displayName() { return "Time"; }

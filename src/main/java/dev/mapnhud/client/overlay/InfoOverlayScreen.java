@@ -3,7 +3,6 @@ package dev.mapnhud.client.overlay;
 import dev.mapnhud.client.MapnHudConfig;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Set;
 import net.minecraft.client.gui.screens.Screen;
 import xyz.kwahson.core.config.KwahsConfigScreen;
 import xyz.kwahson.core.config.ReorderableListScreen;

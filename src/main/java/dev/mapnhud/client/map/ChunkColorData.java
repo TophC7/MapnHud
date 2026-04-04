@@ -1,4 +1,4 @@
-package dev.mapnhud.client;
+package dev.mapnhud.client.map;
 
 /**
  * Pre-computed terrain colors and heights for a single 16×16 chunk column.

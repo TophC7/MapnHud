@@ -5,7 +5,7 @@ import net.minecraft.client.Minecraft;
 /**
  * Shows the current weather. Returns null when clear (nothing to show).
  */
-public class WeatherProvider implements InfoProvider {
+public final class WeatherProvider implements InfoProvider {
 
   @Override public String id() { return "weather"; }
   @Override public String displayName() { return "Weather"; }
