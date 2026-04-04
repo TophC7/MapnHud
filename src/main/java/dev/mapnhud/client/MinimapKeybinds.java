@@ -2,6 +2,9 @@ package dev.mapnhud.client;
 
 import com.mojang.blaze3d.platform.InputConstants;
 import dev.mapnhud.MapnHudMod;
+import dev.mapnhud.client.overlay.InfoOverlayRenderer;
+import net.minecraft.client.Minecraft;
+import xyz.kwahson.core.config.SafeConfig;
 import net.minecraft.client.KeyMapping;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.client.event.ClientTickEvent;
@@ -22,6 +25,7 @@ public class MinimapKeybinds {
   private static final int[] ZOOM_SCALES = MapnHudConfig.ZOOM_SCALES;
   private static int runtimeZoomIndex = -1;
   private static int lastConfigZoom = -1;
+  private static boolean configValidated = false;
 
   // Per-tick config cache (read by MinimapLayer on the render path)
   private static int cachedDisplaySize = 160;
@@ -43,19 +47,30 @@ public class MinimapKeybinds {
 
   @SubscribeEvent
   public static void onClientTick(ClientTickEvent.Post event) {
+    // Validate config on first tick (config isn't loaded at mod construction time)
+    if (!configValidated && MapnHudConfig.SPEC.isLoaded()) {
+      configValidated = true;
+      SafeConfig.validateOrReset(MapnHudMod.MOD_ID, MapnHudConfig.SPEC,
+          MapnHudConfig.MAP_ZOOM, MapnHudConfig.OVERLAY_MASTER_TOGGLE,
+          MapnHudConfig.OVERLAY_ORDER);
+    }
+
     // Sync zoom from config when it changes
-    int configZoom = MapnHudConfig.MAP_ZOOM.get();
+    int configZoom = SafeConfig.getInt(MapnHudConfig.MAP_ZOOM, 1);
     if (configZoom != lastConfigZoom) {
       lastConfigZoom = configZoom;
       runtimeZoomIndex = indexForScale(configZoom);
     }
 
     // Cache all config values as primitives for the render path
-    cachedDisplaySize = MapnHudConfig.MAP_SIZE.get();
-    cachedAspectRatio = MapnHudConfig.MAP_SHAPE.get().floatValue();
-    cachedOpacity = MapnHudConfig.MAP_OPACITY.get().floatValue();
-    cachedNorthLock = MapnHudConfig.MAP_NORTH_LOCK.get();
-    cachedPosition = MapnHudConfig.MAP_POSITION.get();
+    cachedDisplaySize = SafeConfig.getInt(MapnHudConfig.MAP_SIZE, 160);
+    cachedAspectRatio = SafeConfig.getFloat(MapnHudConfig.MAP_SHAPE, 1.0f);
+    cachedOpacity = SafeConfig.getFloat(MapnHudConfig.MAP_OPACITY, 1.0f);
+    cachedNorthLock = SafeConfig.getBool(MapnHudConfig.MAP_NORTH_LOCK, false);
+    cachedPosition = SafeConfig.getEnum(MapnHudConfig.MAP_POSITION, MapnHudConfig.ScreenCorner.TOP_RIGHT);
+
+    // Tick the info overlay (reads config, builds text lines)
+    InfoOverlayRenderer.tick(Minecraft.getInstance());
 
     while (ZOOM_KEY.consumeClick()) {
       runtimeZoomIndex = (runtimeZoomIndex + 1) % ZOOM_SCALES.length;

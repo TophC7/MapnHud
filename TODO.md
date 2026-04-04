@@ -59,7 +59,6 @@ Overlays, panels, and UI elements outside the minimap.
 ### Config
 
 - [ ] Keybinding: toggle minimap visibility
-- [ ] Info overlay sub-screen (placeholder button exists, needs implementation)
 
 ### Tab List Overhaul
 
@@ -73,12 +72,6 @@ Overlays, panels, and UI elements outside the minimap.
 - [ ] Compact horizontal bar near crosshair
 - [ ] Fade in/out transition
 - [ ] Auto-disable if Jade is installed
-
-### HUD Info Overlay
-
-- [ ] Coordinates, biome, light level, compass heading
-- [ ] Configurable anchor position
-- [ ] Vanilla font, shadow text, semi-transparent background
 
 ---
 

@@ -9,6 +9,7 @@ import com.mojang.blaze3d.vertex.VertexFormat;
 import com.mojang.math.Axis;
 import dev.mapnhud.MapnHudMod;
 import dev.mapnhud.client.MapnHudConfig;
+import dev.mapnhud.client.overlay.InfoOverlayRenderer;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
@@ -167,6 +168,9 @@ public class MinimapLayer {
     // -- Player indicator (fixed at center, not rotated) --
     graphics.fill(centerX - 2, centerY - 2, centerX + 2, centerY + 2, 0xFFFFFFFF);
     graphics.fill(centerX - 1, centerY - 1, centerX + 1, centerY + 1, 0xFF333333);
+
+    // -- Info overlay lines --
+    InfoOverlayRenderer.render(graphics, mapX, mapY, displayW, displayH, screenW, screenH);
   }
 
   /**

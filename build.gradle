@@ -10,13 +10,19 @@ group = mod_group_id
 
 java.toolchain.languageVersion = JavaLanguageVersion.of(21)
 
+// KwahsCore: compiled as part of this mod's source set so its classes
+// are in the same NeoForge module. The jarJar dependency is kept for
+// distribution builds, but dev runs use the source directly.
+// Set kwahscore_path in gradle.properties to the KwahsCore project root.
+sourceSets.main.java.srcDir "${kwahscore_path}/src/main/java"
+
 repositories {
     mavenLocal()
 }
 
 dependencies {
-    // KwahsCore: embedded in the mod jar via jarJar, invisible to users
-    jarJar(implementation('xyz.kwahson.core:kwahs_core:0.1.0'))
+    // For distribution: embeds KwahsCore jar inside the mod jar
+    jarJar('xyz.kwahson.core:kwahs_core:0.1.0')
 }
 
 neoForge {
@@ -38,8 +44,6 @@ neoForge {
         configureEach {
             logLevel = org.slf4j.event.Level.DEBUG
             jvmArgument '-Xmx6G'
-            // KwahsCore on runtime classpath for dev runs
-            additionalRuntimeClasspathConfiguration.extendsFrom(configurations.implementation)
         }
     }
 

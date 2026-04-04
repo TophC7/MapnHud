@@ -1,5 +1,7 @@
 package dev.mapnhud.client;
 
+import dev.mapnhud.client.MapnHudConfig.OverlayAlign;
+import dev.mapnhud.client.MapnHudConfig.OverlayPosition;
 import dev.mapnhud.client.MapnHudConfig.ScreenCorner;
 import dev.mapnhud.client.MapnHudConfig.TooltipPosition;
 import java.util.Arrays;
@@ -7,6 +9,7 @@ import java.util.List;
 import net.minecraft.client.gui.screens.Screen;
 import xyz.kwahson.core.config.ConfigTab;
 import xyz.kwahson.core.config.KwahsConfigScreen;
+import xyz.kwahson.core.config.SafeConfig;
 
 /**
  * Configuration screen for Map n Hud. Built on KwahsCore's
@@ -34,7 +37,7 @@ public class MapnHudConfigScreen {
 
     tab.left(tab.toggle("Lock North Up", MapnHudConfig.MAP_NORTH_LOCK));
     tab.right(tab.cycle("Shape",
-        ShapePreset.closest(MapnHudConfig.MAP_SHAPE.get()),
+        ShapePreset.closest((double) SafeConfig.getFloat(MapnHudConfig.MAP_SHAPE, 1.0f)),
         ShapePreset::label, List.of(ShapePreset.ALL),
         (btn, val) -> MapnHudConfig.MAP_SHAPE.set(val.ratio())));
     tab.nextRow();
@@ -45,10 +48,28 @@ public class MapnHudConfigScreen {
     tab.nextRow();
 
     tab.spacer(6);
-    tab.section("Overlay");
+    tab.sections("Overlay", "Overlay Style");
 
-    tab.left(tab.button("Info Overlay...", btn -> {
-      // TODO: open info overlay sub-screen
+    tab.left(tab.toggle("Overlay Enabled", MapnHudConfig.OVERLAY_MASTER_TOGGLE));
+    tab.right(tab.enumButton("Position", MapnHudConfig.OVERLAY_POSITION,
+        OverlayPosition::label, OverlayPosition.values()));
+    tab.nextRow();
+
+    tab.left(tab.enumButton("Alignment", MapnHudConfig.OVERLAY_ALIGNMENT,
+        OverlayAlign::label, OverlayAlign.values()));
+    tab.right(tab.toggle("Background", MapnHudConfig.OVERLAY_BACKGROUND));
+    tab.nextRow();
+
+    tab.left(tab.cycle("Text Color",
+        TextColorPreset.closest(SafeConfig.getInt(MapnHudConfig.OVERLAY_TEXT_COLOR, 0xFFFFFF)),
+        TextColorPreset::label, List.of(TextColorPreset.ALL),
+        (btn, val) -> MapnHudConfig.OVERLAY_TEXT_COLOR.set(val.rgb())));
+    tab.right(tab.percentSlider("Text Scale", 0.5, 1.5, MapnHudConfig.OVERLAY_TEXT_SCALE));
+    tab.nextRow();
+
+    tab.left(tab.button("Configure Lines...", btn -> {
+      var mc = net.minecraft.client.Minecraft.getInstance();
+      mc.setScreen(dev.mapnhud.client.overlay.InfoOverlayScreen.create(mc.screen));
     }));
   }
 
@@ -61,6 +82,25 @@ public class MapnHudConfigScreen {
 
     tab.left(tab.enumButton("Tooltip Position", MapnHudConfig.BLOCK_TOOLTIP_POSITION,
         TooltipPosition::label, TooltipPosition.values()));
+  }
+
+  private record TextColorPreset(String label, int rgb) {
+    static final TextColorPreset[] ALL = {
+        new TextColorPreset("White", 0xFFFFFF),
+        new TextColorPreset("Light Gray", 0xBBBBBB),
+        new TextColorPreset("Yellow", 0xFFFF55),
+        new TextColorPreset("Aqua", 0x55FFFF),
+        new TextColorPreset("Green", 0x55FF55),
+        new TextColorPreset("Gold", 0xFFAA00),
+    };
+
+    static TextColorPreset closest(int val) {
+      TextColorPreset best = ALL[0];
+      for (TextColorPreset p : ALL) {
+        if (p.rgb == val) return p;
+      }
+      return best;
+    }
   }
 
   private record ShapePreset(String label, double ratio) {

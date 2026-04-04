@@ -77,7 +77,7 @@ public final class ChunkScanner {
    * @param northNeighbor cached data for the chunk at (cx, cz-1), or null
    */
   public static ChunkColorData scan(
-      ChunkAccess chunk, Level level, long gameTick,
+      ChunkAccess chunk, Level level,
       ChunkColorData northNeighbor) {
 
     int[] colors = new int[ChunkColorData.PIXELS];
@@ -141,7 +141,7 @@ public final class ChunkScanner {
       }
     }
 
-    return new ChunkColorData(colors, heights, gameTick);
+    return new ChunkColorData(colors, heights);
   }
 
   /**

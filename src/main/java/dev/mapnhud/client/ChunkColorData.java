@@ -18,27 +18,17 @@ public final class ChunkColorData {
 
   private final int[] colors;  // ABGR, length 256
   private final int[] heights; // WORLD_SURFACE heights, length 256
-  private final long scannedAtTick;
 
-  public ChunkColorData(int[] colors, int[] heights, long scannedAtTick) {
+  public ChunkColorData(int[] colors, int[] heights) {
     this.colors = colors;
     this.heights = heights;
-    this.scannedAtTick = scannedAtTick;
   }
 
   public int getColor(int localX, int localZ) {
     return colors[localX * SIZE + localZ];
   }
 
-  public void setColor(int localX, int localZ, int abgr) {
-    colors[localX * SIZE + localZ] = abgr;
-  }
-
   public int getHeight(int localX, int localZ) {
     return heights[localX * SIZE + localZ];
-  }
-
-  public long scannedAtTick() {
-    return scannedAtTick;
   }
 }

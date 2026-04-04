@@ -90,7 +90,7 @@ public class ChunkColorCache {
 
       // Pass north neighbor so row 0 gets correct edge shading immediately
       ChunkColorData northData = get(cx, cz - 1);
-      ChunkColorData data = ChunkScanner.scan(chunk, level, level.getGameTime(), northData);
+      ChunkColorData data = ChunkScanner.scan(chunk, level, northData);
       cache.put(ChunkPos.asLong(cx, cz), data);
       dirty = true;
 
@@ -112,7 +112,7 @@ public class ChunkColorCache {
         && level.hasChunk(chunkX, chunkZ)) {
       ChunkAccess chunk = level.getChunk(chunkX, chunkZ);
       ChunkColorData northData = get(chunkX, chunkZ - 1);
-      ChunkColorData data = ChunkScanner.scan(chunk, level, level.getGameTime(), northData);
+      ChunkColorData data = ChunkScanner.scan(chunk, level, northData);
       cache.put(ChunkPos.asLong(chunkX, chunkZ), data);
       dirty = true;
     }
