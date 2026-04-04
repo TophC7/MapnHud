@@ -52,7 +52,7 @@ public class MinimapKeybinds {
       configValidated = true;
       SafeConfig.validateOrReset(MapnHudMod.MOD_ID, MapnHudConfig.SPEC,
           MapnHudConfig.MAP_ZOOM, MapnHudConfig.OVERLAY_MASTER_TOGGLE,
-          MapnHudConfig.OVERLAY_ORDER);
+          MapnHudConfig.OVERLAY_ORDER, MapnHudConfig.BLOCK_TOOLTIP_POSITION);
     }
 
     // Sync zoom from config when it changes

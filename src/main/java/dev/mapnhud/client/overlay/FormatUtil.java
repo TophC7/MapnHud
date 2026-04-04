@@ -7,8 +7,12 @@ public final class FormatUtil {
 
   /** Converts "minecraft:dark_forest" -> "Dark Forest". Handles empty parts safely. */
   public static String titleCase(ResourceLocation loc) {
-    String path = loc.getPath();
-    String[] parts = path.split("_");
+    return titleCase(loc.getPath());
+  }
+
+  /** Converts "dark_forest" -> "Dark Forest". Splits on underscores and capitalizes. */
+  public static String titleCase(String raw) {
+    String[] parts = raw.split("_");
     StringBuilder sb = new StringBuilder();
     for (String part : parts) {
       if (part.isEmpty()) continue;

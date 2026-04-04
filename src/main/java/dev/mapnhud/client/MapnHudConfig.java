@@ -136,7 +136,7 @@ public final class MapnHudConfig {
 
     BLOCK_TOOLTIP_POSITION = builder
         .comment("Where the block tooltip bar appears on screen.")
-        .defineEnum("blockTooltipPosition", TooltipPosition.CROSSHAIR);
+        .defineEnum("blockTooltipPosition", TooltipPosition.TOP_CENTER);
 
     TAB_DISTANCES_ENABLED = builder
         .comment("Show player distances in the tab list.")
