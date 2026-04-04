@@ -17,17 +17,18 @@ import net.minecraft.world.level.chunk.LevelChunk;
  *
  * <p>Chunks are enqueued on {@code ChunkEvent.Load} and scanned at a rate
  * of {@link #CHUNKS_PER_TICK} per client tick to avoid frame drops when many
- * chunks arrive at once. The player's chunk is periodically re-scanned to
- * pick up block changes from building/mining.
+ * chunks arrive at once. The 3x3 area around the player is periodically
+ * re-scanned (bypassing the queue) to pick up block changes from
+ * building, mining, fire, and other real-time events.
  *
  * <p>Uses {@code Long2ObjectOpenHashMap} (fastutil, shipped with Minecraft) to
  * avoid ChunkPos allocation on every cache lookup.
  */
 public final class ChunkColorCache {
 
-  private static final int CHUNKS_PER_TICK = 2;
-  private static final int RESCAN_PLAYER_CHUNK_INTERVAL = 40;
-  private static final int RESCAN_ADJACENT_INTERVAL = 100;
+  private static final int CHUNKS_PER_TICK = 4;
+  private static final int RESCAN_PLAYER_CHUNK_INTERVAL = 4;
+  private static final int RESCAN_ADJACENT_INTERVAL = 20;
 
   private final Long2ObjectOpenHashMap<ChunkColorData> cache = new Long2ObjectOpenHashMap<>();
   private final ArrayDeque<ChunkAccess> scanQueue = new ArrayDeque<>();
@@ -113,19 +114,21 @@ public final class ChunkColorCache {
       dirty = true;
     }
 
+    // Adjacent chunks scan immediately (bypass queue) since scanning
+    // raw column data is cheap. Keeps the queue free for new chunk loads.
     if (tickCounter % RESCAN_ADJACENT_INTERVAL == 0) {
       for (int dx = -1; dx <= 1; dx++) {
         for (int dz = -1; dz <= 1; dz++) {
           if (dx == 0 && dz == 0) continue;
-          enqueueRescan(level, chunkX + dx, chunkZ + dz);
+          int nx = chunkX + dx;
+          int nz = chunkZ + dz;
+          if (level.hasChunk(nx, nz)) {
+            ChunkColorData data = ChunkScanner.scan(level.getChunk(nx, nz), level);
+            cache.put(ChunkPos.asLong(nx, nz), data);
+            dirty = true;
+          }
         }
       }
-    }
-  }
-
-  private void enqueueRescan(Level level, int chunkX, int chunkZ) {
-    if (level.hasChunk(chunkX, chunkZ)) {
-      scanQueue.addLast(level.getChunk(chunkX, chunkZ));
     }
   }
 }
