@@ -33,6 +33,7 @@ public class MinimapKeybinds {
   private static float cachedOpacity = 1.0f;
   private static boolean cachedNorthLock = false;
   private static MapnHudConfig.ScreenCorner cachedPosition = MapnHudConfig.ScreenCorner.TOP_RIGHT;
+  private static RenderConfig cachedRenderConfig = RenderConfig.DEFAULT;
 
   private static final KeyMapping ZOOM_KEY = new KeyMapping(
       "key." + MapnHudMod.MOD_ID + ".zoom",
@@ -51,8 +52,9 @@ public class MinimapKeybinds {
     if (!configValidated && MapnHudConfig.SPEC.isLoaded()) {
       configValidated = true;
       SafeConfig.validateOrReset(MapnHudMod.MOD_ID, MapnHudConfig.SPEC,
-          MapnHudConfig.MAP_ZOOM, MapnHudConfig.OVERLAY_MASTER_TOGGLE,
-          MapnHudConfig.OVERLAY_ORDER, MapnHudConfig.BLOCK_TOOLTIP_POSITION);
+          MapnHudConfig.MAP_ZOOM, MapnHudConfig.RENDER_AO_ENABLED,
+          MapnHudConfig.OVERLAY_MASTER_TOGGLE, MapnHudConfig.OVERLAY_ORDER,
+          MapnHudConfig.BLOCK_TOOLTIP_POSITION);
     }
 
     // Sync zoom from config when it changes
@@ -68,6 +70,7 @@ public class MinimapKeybinds {
     cachedOpacity = SafeConfig.getFloat(MapnHudConfig.MAP_OPACITY, 1.0f);
     cachedNorthLock = SafeConfig.getBool(MapnHudConfig.MAP_NORTH_LOCK, false);
     cachedPosition = SafeConfig.getEnum(MapnHudConfig.MAP_POSITION, MapnHudConfig.ScreenCorner.TOP_RIGHT);
+    cachedRenderConfig = RenderConfig.fromConfig();
 
     // Tick the info overlay (reads config, builds text lines)
     InfoOverlayRenderer.tick(Minecraft.getInstance());
@@ -82,6 +85,7 @@ public class MinimapKeybinds {
   public static float getOpacity() { return cachedOpacity; }
   public static boolean isNorthLocked() { return cachedNorthLock; }
   public static MapnHudConfig.ScreenCorner getPosition() { return cachedPosition; }
+  public static RenderConfig getRenderConfig() { return cachedRenderConfig; }
 
   public static int getScale() {
     if (runtimeZoomIndex < 0) return 1;

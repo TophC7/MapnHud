@@ -3,9 +3,12 @@ package dev.mapnhud.client;
 import dev.mapnhud.client.MapnHudConfig.OverlayAlign;
 import dev.mapnhud.client.MapnHudConfig.OverlayPosition;
 import dev.mapnhud.client.MapnHudConfig.ScreenCorner;
+import dev.mapnhud.client.MapnHudConfig.ShadingMode;
 import dev.mapnhud.client.MapnHudConfig.TooltipPosition;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.screens.Screen;
 import xyz.kwahson.core.config.ConfigTab;
 import xyz.kwahson.core.config.KwahsConfigScreen;
@@ -22,6 +25,7 @@ public class MapnHudConfigScreen {
   public static Screen create(Screen parent) {
     return KwahsConfigScreen.builder("Kwah's Map n Hud", parent, MapnHudConfig.SPEC)
         .tab("Map", MapnHudConfigScreen::buildMapTab)
+        .tab("Rendering", MapnHudConfigScreen::buildRenderingTab)
         .tab("HUD", MapnHudConfigScreen::buildHudTab)
         .build();
   }
@@ -71,6 +75,101 @@ public class MapnHudConfigScreen {
       var mc = net.minecraft.client.Minecraft.getInstance();
       mc.setScreen(dev.mapnhud.client.overlay.InfoOverlayScreen.create(mc.screen));
     }));
+  }
+
+  private static void buildRenderingTab(ConfigTab tab) {
+    // Widgets that only apply in heightfield mode
+    var hfWidgets = new ArrayList<AbstractWidget>();
+
+    ShadingMode current = SafeConfig.getEnum(
+        MapnHudConfig.RENDER_SHADING_MODE, ShadingMode.CLASSIC);
+
+    // -- Mode selector --
+
+    tab.left(tab.cycle("Shading", current, ShadingMode::label,
+        List.of(ShadingMode.values()),
+        (btn, val) -> {
+          MapnHudConfig.RENDER_SHADING_MODE.set(val);
+          boolean hf = val == ShadingMode.HEIGHTFIELD;
+          for (var w : hfWidgets) w.active = hf;
+        }));
+    tab.nextRow();
+
+    // -- Shared: terrain + water (both modes) --
+
+    tab.spacer(6);
+    tab.sections("Terrain", "Water");
+
+    tab.left(tab.doubleSlider("Height Scale", "", 0.0, 0.030,
+        MapnHudConfig.RENDER_HEIGHT_FACTOR));
+    tab.right(tab.doubleSlider("Water Base Alpha", "", 0.10, 0.90,
+        MapnHudConfig.RENDER_WATER_ALPHA_BASE));
+    tab.nextRow();
+
+    tab.left(tab.doubleSlider("Height Min", "", 0.50, 1.0,
+        MapnHudConfig.RENDER_HEIGHT_MIN));
+    tab.right(tab.doubleSlider("Water Per Depth", "", 0.0, 0.15,
+        MapnHudConfig.RENDER_WATER_ALPHA_DEPTH));
+    tab.nextRow();
+
+    tab.left(tab.doubleSlider("Height Max", "", 1.0, 1.50,
+        MapnHudConfig.RENDER_HEIGHT_MAX));
+    tab.right(tab.doubleSlider("Water Max Alpha", "", 0.30, 1.0,
+        MapnHudConfig.RENDER_WATER_ALPHA_MAX));
+    tab.nextRow();
+
+    tab.left(tab.doubleSlider("Leaf Shade", "", 0.40, 1.0,
+        MapnHudConfig.RENDER_LEAF_SHADE));
+    tab.nextRow();
+
+    // -- Heightfield only: lighting + occlusion --
+
+    tab.spacer(6);
+    tab.sections("Heightfield Lighting", "Heightfield Occlusion");
+
+    var lightAngle = tab.intSlider("Light Angle", "\u00B0", 0, 345, 15,
+        MapnHudConfig.RENDER_LIGHT_ANGLE);
+    var aoToggle = tab.toggle("Ambient Occlusion", MapnHudConfig.RENDER_AO_ENABLED);
+    tab.left(lightAngle);
+    tab.right(aoToggle);
+    hfWidgets.add(lightAngle);
+    hfWidgets.add(aoToggle);
+    tab.nextRow();
+
+    var sunHeight = tab.doubleSlider("Sun Height", "", 0.5, 4.0,
+        MapnHudConfig.RENDER_LIGHT_ELEVATION);
+    var aoStrength = tab.doubleSlider("AO Strength", "", 0.01, 0.20,
+        MapnHudConfig.RENDER_AO_STRENGTH);
+    tab.left(sunHeight);
+    tab.right(aoStrength);
+    hfWidgets.add(sunHeight);
+    hfWidgets.add(aoStrength);
+    tab.nextRow();
+
+    var ambient = tab.doubleSlider("Ambient", "", 0.2, 0.9,
+        MapnHudConfig.RENDER_AMBIENT);
+    var aoMax = tab.doubleSlider("AO Max Darken", "", 0.05, 0.50,
+        MapnHudConfig.RENDER_AO_MAX);
+    tab.left(ambient);
+    tab.right(aoMax);
+    hfWidgets.add(ambient);
+    hfWidgets.add(aoMax);
+    tab.nextRow();
+
+    var smoothness = tab.doubleSlider("Terrain Smoothness", "", 0.5, 8.0,
+        MapnHudConfig.RENDER_TERRAIN_SMOOTHNESS);
+    tab.left(smoothness);
+    hfWidgets.add(smoothness);
+    tab.nextRow();
+
+    // Grey out heightfield widgets when classic mode is active
+    boolean hf = current == ShadingMode.HEIGHTFIELD;
+    for (var w : hfWidgets) w.active = hf;
+
+    // -- Preview --
+
+    tab.spacer(6);
+    tab.center(new MinimapPreviewWidget(412));
   }
 
   private static void buildHudTab(ConfigTab tab) {

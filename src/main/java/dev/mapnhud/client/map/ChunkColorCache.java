@@ -9,7 +9,11 @@ import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.chunk.LevelChunk;
 
 /**
- * Event-driven cache of per-chunk terrain colors for the minimap.
+ * Event-driven cache of raw per-chunk column data for the minimap.
+ *
+ * <p>Stores unshaded base colors, heights, and water metadata. All shading
+ * is deferred to the viewport assembler where the full visible heightfield
+ * eliminates chunk boundary seams by design.
  *
  * <p>Chunks are enqueued on {@code ChunkEvent.Load} and scanned at a rate
  * of {@link #CHUNKS_PER_TICK} per client tick to avoid frame drops when many
@@ -88,16 +92,9 @@ public final class ChunkColorCache {
       int cx = chunk.getPos().x;
       int cz = chunk.getPos().z;
 
-      // Pass north neighbor so row 0 gets correct edge shading immediately
-      ChunkColorData northData = get(cx, cz - 1);
-      ChunkColorData data = ChunkScanner.scan(chunk, level, northData);
+      ChunkColorData data = ChunkScanner.scan(chunk, level);
       cache.put(ChunkPos.asLong(cx, cz), data);
       dirty = true;
-
-      // The south neighbor's row 0 depends on this chunk's row 15 heights.
-      // It self-corrects on the periodic rescan timer rather than being
-      // re-enqueued here, which would cascade and clog the scan queue.
-
       processed++;
     }
   }
@@ -111,8 +108,7 @@ public final class ChunkColorCache {
     if (tickCounter % RESCAN_PLAYER_CHUNK_INTERVAL == 0
         && level.hasChunk(chunkX, chunkZ)) {
       ChunkAccess chunk = level.getChunk(chunkX, chunkZ);
-      ChunkColorData northData = get(chunkX, chunkZ - 1);
-      ChunkColorData data = ChunkScanner.scan(chunk, level, northData);
+      ChunkColorData data = ChunkScanner.scan(chunk, level);
       cache.put(ChunkPos.asLong(chunkX, chunkZ), data);
       dirty = true;
     }

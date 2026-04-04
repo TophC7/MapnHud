@@ -26,17 +26,22 @@ public class MinimapRenderer {
 
   private int lastScale = -1;
   private int currentSize = -1;
+  private int lastSeaLevel = Integer.MIN_VALUE;
+  private RenderConfig lastRenderConfig;
 
   /**
    * Update the minimap texture for the current frame.
    * Re-assembles when the player moves to a new block, cache data changes,
-   * the zoom scale changes, or the map size changes.
+   * the zoom scale changes, rendering config changes, or the map size changes.
    *
-   * @param mapSize  texture resolution in pixels (matches config frame size)
+   * @param mapSize    texture resolution in pixels (matches config frame size)
+   * @param seaLevel   world sea level for height-relative shading
+   * @param config     rendering config snapshot from this tick
    */
   public ResourceLocation update(
       double playerX, double playerZ, ChunkColorCache cache,
-      boolean cacheUpdated, int scale, int mapSize) {
+      boolean cacheUpdated, int scale, int mapSize,
+      int seaLevel, RenderConfig config) {
 
     if (texture == null || mapSize != currentSize) {
       recreateTexture(mapSize);
@@ -47,11 +52,14 @@ public class MinimapRenderer {
 
     boolean posChanged = blockX != lastBlockX || blockZ != lastBlockZ;
     boolean scaleChanged = scale != lastScale;
-    if (posChanged || cacheUpdated || scaleChanged || needsRefresh) {
-      assembler.assemble(image, cache, blockX, blockZ, scale, mapSize);
+    boolean shadingChanged = seaLevel != lastSeaLevel || !config.equals(lastRenderConfig);
+    if (posChanged || cacheUpdated || scaleChanged || shadingChanged || needsRefresh) {
+      assembler.assemble(image, cache, blockX, blockZ, scale, mapSize, seaLevel, config);
       lastBlockX = blockX;
       lastBlockZ = blockZ;
       lastScale = scale;
+      lastSeaLevel = seaLevel;
+      lastRenderConfig = config;
       needsRefresh = false;
       texture.upload();
     }

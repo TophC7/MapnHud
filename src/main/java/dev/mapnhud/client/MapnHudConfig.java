@@ -21,6 +21,23 @@ public final class MapnHudConfig {
   public static final ModConfigSpec.IntValue MAP_SIZE;
   public static final ModConfigSpec.DoubleValue MAP_SHAPE;
 
+  // -- Rendering --
+  public static final ModConfigSpec.EnumValue<ShadingMode> RENDER_SHADING_MODE;
+  public static final ModConfigSpec.IntValue RENDER_LIGHT_ANGLE;
+  public static final ModConfigSpec.DoubleValue RENDER_LIGHT_ELEVATION;
+  public static final ModConfigSpec.DoubleValue RENDER_AMBIENT;
+  public static final ModConfigSpec.DoubleValue RENDER_TERRAIN_SMOOTHNESS;
+  public static final ModConfigSpec.BooleanValue RENDER_AO_ENABLED;
+  public static final ModConfigSpec.DoubleValue RENDER_AO_STRENGTH;
+  public static final ModConfigSpec.DoubleValue RENDER_AO_MAX;
+  public static final ModConfigSpec.DoubleValue RENDER_HEIGHT_FACTOR;
+  public static final ModConfigSpec.DoubleValue RENDER_HEIGHT_MIN;
+  public static final ModConfigSpec.DoubleValue RENDER_HEIGHT_MAX;
+  public static final ModConfigSpec.DoubleValue RENDER_LEAF_SHADE;
+  public static final ModConfigSpec.DoubleValue RENDER_WATER_ALPHA_BASE;
+  public static final ModConfigSpec.DoubleValue RENDER_WATER_ALPHA_DEPTH;
+  public static final ModConfigSpec.DoubleValue RENDER_WATER_ALPHA_MAX;
+
   // -- Overlay --
   public static final ModConfigSpec.BooleanValue OVERLAY_MASTER_TOGGLE;
   public static final ModConfigSpec.EnumValue<OverlayPosition> OVERLAY_POSITION;
@@ -71,6 +88,86 @@ public final class MapnHudConfig {
         .comment("Map width-to-height ratio. 1.0 = square, 1.5 = 3:2 wide.")
         .defineInRange("shape", 1.0, 1.0, 2.0);
 
+    builder.pop();
+
+    // -- Rendering engine tuning --
+    builder.push("rendering");
+
+    RENDER_SHADING_MODE = builder
+        .comment("CLASSIC = sharp pixel-art edges (vanilla map style). HEIGHTFIELD = smooth directional lighting with terrain relief.")
+        .defineEnum("shadingMode", ShadingMode.CLASSIC);
+
+    builder.push("lighting");
+
+    RENDER_LIGHT_ANGLE = builder
+        .comment("Compass direction of the sun in degrees. 0 = north, 90 = east, 315 = northwest.")
+        .defineInRange("lightAngle", 315, 0, 345);
+
+    RENDER_LIGHT_ELEVATION = builder
+        .comment("Sun height. Higher = more overhead, lower = more raking shadows.")
+        .defineInRange("lightElevation", 2.0, 0.5, 4.0);
+
+    RENDER_AMBIENT = builder
+        .comment("Minimum brightness floor. Prevents pure-black shadows.")
+        .defineInRange("ambient", 0.55, 0.2, 0.9);
+
+    RENDER_TERRAIN_SMOOTHNESS = builder
+        .comment("Higher = smoother terrain relief, lower = more dramatic height differences.")
+        .defineInRange("terrainSmoothness", 2.5, 0.5, 8.0);
+
+    builder.pop();
+
+    builder.push("occlusion");
+
+    RENDER_AO_ENABLED = builder
+        .comment("Darken valleys and ravines for depth perception.")
+        .define("enabled", true);
+
+    RENDER_AO_STRENGTH = builder
+        .comment("How aggressively valleys darken.")
+        .defineInRange("strength", 0.05, 0.01, 0.20);
+
+    RENDER_AO_MAX = builder
+        .comment("Maximum darkening from ambient occlusion.")
+        .defineInRange("maxDarkening", 0.30, 0.05, 0.50);
+
+    builder.pop();
+
+    builder.push("terrain");
+
+    RENDER_HEIGHT_FACTOR = builder
+        .comment("Per-block brightness scale relative to sea level. Higher = more elevation contrast.")
+        .defineInRange("heightFactor", 0.012, 0.0, 0.030);
+
+    RENDER_HEIGHT_MIN = builder
+        .comment("Minimum terrain brightness (deep valleys).")
+        .defineInRange("heightMin", 0.78, 0.50, 1.0);
+
+    RENDER_HEIGHT_MAX = builder
+        .comment("Maximum terrain brightness (mountain peaks).")
+        .defineInRange("heightMax", 1.15, 1.0, 1.50);
+
+    RENDER_LEAF_SHADE = builder
+        .comment("Leaf block darkening. 1.0 = no darkening, 0.4 = very dark.")
+        .defineInRange("leafShade", 0.75, 0.40, 1.0);
+
+    builder.pop();
+
+    builder.push("water");
+
+    RENDER_WATER_ALPHA_BASE = builder
+        .comment("Base water overlay opacity (shallow water).")
+        .defineInRange("alphaBase", 0.55, 0.10, 0.90);
+
+    RENDER_WATER_ALPHA_DEPTH = builder
+        .comment("Additional opacity per block of water depth.")
+        .defineInRange("alphaPerDepth", 0.04, 0.0, 0.15);
+
+    RENDER_WATER_ALPHA_MAX = builder
+        .comment("Maximum water opacity (deepest water).")
+        .defineInRange("alphaMax", 0.82, 0.30, 1.0);
+
+    builder.pop();
     builder.pop();
 
     builder.push("overlay");
@@ -150,6 +247,17 @@ public final class MapnHudConfig {
   private MapnHudConfig() {}
 
   // -- Enums --
+
+  public enum ShadingMode {
+    CLASSIC("Classic"),
+    HEIGHTFIELD("Heightfield");
+
+    private final String label;
+
+    ShadingMode(String label) { this.label = label; }
+
+    public String label() { return label; }
+  }
 
   public enum ScreenCorner {
     TOP_LEFT("Top Left"),

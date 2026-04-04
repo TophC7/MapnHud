@@ -16,19 +16,26 @@ Architectural refactor for better visuals and cleaner shading logic.
 
 #### Viewport-first renderer
 
-- [ ] Cache raw column data (base color, rendered height, water metadata) instead of final shaded colors
-- [ ] Shade during assembly in one continuous pass over the visible viewport
-- [ ] Chunk seams become impossible since shading never crosses cache boundaries
+- [x] Cache raw column data (base color, rendered height, water metadata) instead of final shaded colors
+- [x] Shade during assembly in one continuous pass over the visible viewport
+- [x] Chunk seams become impossible since shading never crosses cache boundaries
 
 #### Heightfield lighting
 
-- [ ] Compute smoothed heightfield normals/gradients from the visible viewport
-- [ ] Directional light + ambient term for natural terrain relief
-- [ ] Optional curvature/AO term for valleys and overhangs
-- [ ] Apply material color and water tint last
+- [x] Compute smoothed heightfield normals/gradients from the visible viewport
+- [x] Directional light + ambient term for natural terrain relief
+- [x] AO term for valleys and overhangs (config-togglable)
+- [x] Apply material color and water tint last
 
-Both depend on the viewport-first renderer being in place first, since heightfield
-lighting needs the full visible heightfield in one pass.
+#### Tuning (needs play-testing)
+
+All rendering values are now live-tunable via the Rendering tab config screen.
+Play-test in varied terrain and decide on final defaults for:
+
+- [ ] Lighting: ambient, light angle, sun height, terrain smoothness
+- [ ] AO: strength, max darkening
+- [ ] Terrain: height scale, height min/max, leaf shade
+- [ ] Water: base alpha, per-depth, max alpha
 
 ### Iteration 5: Map Polish
 
@@ -68,9 +75,6 @@ Overlays, panels, and UI elements outside the minimap.
 
 ### Block Tooltip (Jade-Lite)
 
-- [ ] Raycast to block name + icon + source mod
-- [ ] Compact horizontal bar near crosshair
-- [ ] Fade in/out transition
 - [ ] Auto-disable if Jade is installed
 
 ---

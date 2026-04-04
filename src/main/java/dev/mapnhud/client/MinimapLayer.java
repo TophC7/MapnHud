@@ -50,6 +50,12 @@ public final class MinimapLayer {
 
   private static final MinimapRenderer renderer = new MinimapRenderer();
 
+  /** Last texture ID from the renderer, readable by the config screen preview. */
+  private static ResourceLocation lastTextureId;
+
+  /** Returns the current minimap texture, or null if not yet rendered. */
+  public static ResourceLocation getTextureId() { return lastTextureId; }
+
   private static final ResourceLocation LAYER_ID =
       ResourceLocation.fromNamespaceAndPath(MapnHudMod.MOD_ID, "minimap");
 
@@ -82,7 +88,10 @@ public final class MinimapLayer {
 
     ChunkColorCache cache = ChunkCacheEventHandler.getCache();
     boolean cacheUpdated = ChunkCacheEventHandler.consumeDirty();
-    ResourceLocation texId = renderer.update(playerX, playerZ, cache, cacheUpdated, scale, texSize);
+    int seaLevel = player.level().getSeaLevel();
+    RenderConfig renderConfig = MinimapKeybinds.getRenderConfig();
+    ResourceLocation texId = renderer.update(playerX, playerZ, cache, cacheUpdated, scale, texSize, seaLevel, renderConfig);
+    lastTextureId = texId;
     if (texId == null) return;
 
     int screenW = graphics.guiWidth();
