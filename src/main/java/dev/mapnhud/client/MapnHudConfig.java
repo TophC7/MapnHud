@@ -24,6 +24,11 @@ public final class MapnHudConfig {
   // -- Cave --
   public static final ModConfigSpec.BooleanValue CAVE_MODE_ENABLED;
 
+  // -- Scan --
+  public static final ModConfigSpec.DoubleValue SCAN_RADIUS_MULTIPLIER;
+  public static final ModConfigSpec.IntValue CAVE_SCAN_RADIUS;
+  public static final ModConfigSpec.IntValue CAVE_FLOOD_RADIUS;
+
   // -- Rendering --
   public static final ModConfigSpec.EnumValue<ShadingMode> RENDER_SHADING_MODE;
   public static final ModConfigSpec.IntValue RENDER_LIGHT_ANGLE;
@@ -98,6 +103,25 @@ public final class MapnHudConfig {
     CAVE_MODE_ENABLED = builder
         .comment("Auto-switch to cave view when underground. When off, the surface map is always shown.")
         .define("enabled", true);
+
+    builder.pop();
+
+    builder.push("scan");
+
+    SCAN_RADIUS_MULTIPLIER = builder
+        .comment("Fraction of render distance to actively rescan. Lower values reduce CPU usage.",
+                 "1.0 = scan everything loaded, 0.5 = scan half the render distance.")
+        .defineInRange("radiusMultiplier", 1.0, 0.25, 1.0);
+
+    CAVE_SCAN_RADIUS = builder
+        .comment("Cave-specific scan radius in blocks. 0 = use the surface scan radius.",
+                 "Set a lower value to reduce cave mode CPU usage independently.")
+        .defineInRange("caveScanRadius", 0, 0, 256);
+
+    CAVE_FLOOD_RADIUS = builder
+        .comment("Maximum distance in blocks for the cave flood fill BFS.",
+                 "Higher values reveal more cave space but cost more CPU per flood.")
+        .defineInRange("caveFloodRadius", 100, 32, 256);
 
     builder.pop();
 

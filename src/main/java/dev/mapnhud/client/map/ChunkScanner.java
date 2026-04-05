@@ -99,15 +99,27 @@ public final class ChunkScanner {
   public static ChunkColorData scanCave(
       ChunkAccess chunk, Level level, CaveFloodFill.Result flood) {
 
+    int chunkWorldX = chunk.getPos().getMinBlockX();
+    int chunkWorldZ = chunk.getPos().getMinBlockZ();
+
+    // Skip chunks with no reachable columns. Returning null prevents
+    // overwriting persisted cave data with all-walls black.
+    boolean anyReachable = false;
+    for (int lx = 0; lx < 16 && !anyReachable; lx++) {
+      for (int lz = 0; lz < 16 && !anyReachable; lz++) {
+        if (flood.isReachable(chunkWorldX + lx, chunkWorldZ + lz)) {
+          anyReachable = true;
+        }
+      }
+    }
+    if (!anyReachable) return null;
+
     int[] baseColors = new int[ChunkColorData.PIXELS];
     int[] heights = new int[ChunkColorData.PIXELS];
     int[] waterDepths = new int[ChunkColorData.PIXELS];
     int[] waterTints = new int[ChunkColorData.PIXELS];
     boolean[] isLeaf = new boolean[ChunkColorData.PIXELS];
-    boolean[] isWall = new boolean[ChunkColorData.PIXELS];
-
-    int chunkWorldX = chunk.getPos().getMinBlockX();
-    int chunkWorldZ = chunk.getPos().getMinBlockZ();
+    boolean[] known = new boolean[ChunkColorData.PIXELS];
 
     BlockPos.MutableBlockPos mutable = new BlockPos.MutableBlockPos();
     BlockColors blockColors = Minecraft.getInstance().getBlockColors();
@@ -120,8 +132,8 @@ public final class ChunkScanner {
         int idx = localX * 16 + localZ;
 
         if (!flood.isReachable(worldX, worldZ)) {
-          isWall[idx] = true;
-          baseColors[idx] = 0xFF000000;
+          // Unreachable: known stays false, no terrain data written.
+          // The assembler renders these as walls or placeholders.
           continue;
         }
 
@@ -130,10 +142,11 @@ public final class ChunkScanner {
         ColumnResult col = scanColumn(level, mutable, walkingY);
         processColumn(blockColors, level, mutable, worldX, worldZ, col, idx,
             baseColors, heights, waterDepths, waterTints, isLeaf);
+        known[idx] = true;
       }
     }
 
-    return new ChunkColorData(baseColors, heights, waterDepths, waterTints, isLeaf, isWall);
+    return new ChunkColorData(baseColors, heights, waterDepths, waterTints, isLeaf, known);
   }
 
   /**

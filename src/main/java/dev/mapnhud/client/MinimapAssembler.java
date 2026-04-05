@@ -40,7 +40,7 @@ public class MinimapAssembler {
   private int[] vWaterDepths;
   private int[] vWaterTints;
   private boolean[] vIsLeaf;
-  private boolean[] vIsWall;
+  private boolean[] vKnown;
   private boolean[] vHasData;
 
   // Per-frame shading state (set in shade(), read by compute methods)
@@ -77,7 +77,7 @@ public class MinimapAssembler {
     vWaterDepths = new int[len];
     vWaterTints = new int[len];
     vIsLeaf = new boolean[len];
-    vIsWall = new boolean[len];
+    vKnown = new boolean[len];
     vHasData = new boolean[len];
     allocatedSize = mapSize;
   }
@@ -121,7 +121,7 @@ public class MinimapAssembler {
           vWaterDepths[i] = lastData.getWaterDepth(lx, lz);
           vWaterTints[i] = lastData.getWaterTint(lx, lz);
           vIsLeaf[i] = lastData.isLeaf(lx, lz);
-          vIsWall[i] = lastData.isWall(lx, lz);
+          vKnown[i] = lastData.isKnown(lx, lz);
           vHasData[i] = true;
         } else {
           vHasData[i] = false;
@@ -179,7 +179,7 @@ public class MinimapAssembler {
           image.setPixelRGBA(px, pz, PLACEHOLDER);
           continue;
         }
-        if (vIsWall[i]) {
+        if (!vKnown[i]) {
           image.setPixelRGBA(px, pz, WALL_COLOR);
           continue;
         }
@@ -253,7 +253,7 @@ public class MinimapAssembler {
           image.setPixelRGBA(px, pz, PLACEHOLDER);
           continue;
         }
-        if (vIsWall[i]) {
+        if (!vKnown[i]) {
           image.setPixelRGBA(px, pz, WALL_COLOR);
           continue;
         }
@@ -376,7 +376,7 @@ public class MinimapAssembler {
     if (px < 0 || pz < 0 || px >= mapSize || pz >= mapSize) return fallback;
 
     int i = px * mapSize + pz;
-    if (!vHasData[i] || vIsWall[i]) return fallback;
+    if (!vHasData[i] || !vKnown[i]) return fallback;
     return vHeights[i];
   }
 

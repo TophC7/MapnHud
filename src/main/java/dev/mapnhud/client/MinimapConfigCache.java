@@ -30,6 +30,11 @@ public final class MinimapConfigCache {
   private static MapnHudConfig.ScreenCorner cachedPosition = MapnHudConfig.ScreenCorner.TOP_RIGHT;
   private static RenderConfig cachedRenderConfig = RenderConfig.DEFAULT;
 
+  // Scan radius (computed from config + render distance each tick)
+  private static int cachedScanRadiusChunks = 12;
+  private static int cachedCaveScanRadiusChunks = 12;
+  private static int cachedCaveFloodRadiusBlocks = 100;
+
   @SubscribeEvent
   public static void onClientTick(ClientTickEvent.Post event) {
     // Validate config on first tick (config isn't loaded at mod construction time)
@@ -49,7 +54,18 @@ public final class MinimapConfigCache {
     cachedPosition = SafeConfig.getEnum(MapnHudConfig.MAP_POSITION, MapnHudConfig.ScreenCorner.TOP_RIGHT);
     cachedRenderConfig = RenderConfig.fromConfig();
 
+    // Scan radius: fraction of render distance, capped at what's loaded
     Minecraft mc = Minecraft.getInstance();
+    int renderDist = mc.options.renderDistance().get();
+    double multiplier = SafeConfig.getFloat(MapnHudConfig.SCAN_RADIUS_MULTIPLIER, 1.0f);
+    cachedScanRadiusChunks = Math.max(1, (int) (renderDist * multiplier));
+
+    int caveScanBlocks = SafeConfig.getInt(MapnHudConfig.CAVE_SCAN_RADIUS, 0);
+    cachedCaveScanRadiusChunks = caveScanBlocks == 0
+        ? cachedScanRadiusChunks
+        : Math.max(1, caveScanBlocks / 16);
+
+    cachedCaveFloodRadiusBlocks = SafeConfig.getInt(MapnHudConfig.CAVE_FLOOD_RADIUS, 100);
     CaveModeTracker.tick(mc);
     MinimapKeybinds.tick();
     InfoOverlayRenderer.tick(mc);
@@ -61,4 +77,7 @@ public final class MinimapConfigCache {
   public static boolean isNorthLocked() { return cachedNorthLock; }
   public static MapnHudConfig.ScreenCorner getPosition() { return cachedPosition; }
   public static RenderConfig getRenderConfig() { return cachedRenderConfig; }
+  public static int getScanRadiusChunks() { return cachedScanRadiusChunks; }
+  public static int getCaveScanRadiusChunks() { return cachedCaveScanRadiusChunks; }
+  public static int getCaveFloodRadiusBlocks() { return cachedCaveFloodRadiusBlocks; }
 }

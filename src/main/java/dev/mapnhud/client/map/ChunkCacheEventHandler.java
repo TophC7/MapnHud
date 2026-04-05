@@ -37,17 +37,24 @@ public final class ChunkCacheEventHandler {
   }
 
   @SubscribeEvent
-  public static void onChunkUnload(ChunkEvent.Unload event) {
-    if (!event.getLevel().isClientSide()) return;
-    CACHE.evict(event.getChunk().getPos());
-  }
-
-  @SubscribeEvent
   public static void onLevelLoad(LevelEvent.Load event) {
-    if (!(event.getLevel() instanceof ClientLevel)) return;
+    if (!(event.getLevel() instanceof ClientLevel clientLevel)) return;
+    // Save previous dimension's data before clearing
+    CACHE.saveAllToDisk();
     CACHE.clearAll();
     // Force texture color re-extraction on next tick (handles resource pack changes)
     BlockColorExtractor.reset();
+    // Load persisted chunks for the new dimension
+    CACHE.loadFromDisk(clientLevel);
+  }
+
+  @SubscribeEvent
+  public static void onLevelUnload(LevelEvent.Unload event) {
+    if (!(event.getLevel() instanceof ClientLevel)) return;
+    CACHE.saveAllToDisk();
+    // Flush pending writes and release the IO thread.
+    // The executor recreates itself on next dimension load.
+    CACHE.shutdown();
   }
 
   @SubscribeEvent
@@ -60,6 +67,9 @@ public final class ChunkCacheEventHandler {
     }
 
     boolean caveMode = dev.mapnhud.client.CaveModeTracker.isCaveMode();
-    cacheUpdatedThisTick = CACHE.tick(mc.level, mc.player.blockPosition(), caveMode);
+    cacheUpdatedThisTick = CACHE.tick(mc.level, mc.player.blockPosition(), caveMode,
+        dev.mapnhud.client.MinimapConfigCache.getScanRadiusChunks(),
+        dev.mapnhud.client.MinimapConfigCache.getCaveScanRadiusChunks(),
+        dev.mapnhud.client.MinimapConfigCache.getCaveFloodRadiusBlocks());
   }
 }

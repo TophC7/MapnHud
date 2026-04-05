@@ -8,6 +8,7 @@ import java.util.Arrays;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.levelgen.Heightmap;
 
 /**
  * 2D breadth-first flood fill that determines reachable cave columns from the
@@ -128,6 +129,9 @@ public final class CaveFloodFill {
 
         int walkY = findWalkableY(level, mutable, nx, nz, y, STEP_DELTA);
         if (walkY != Integer.MIN_VALUE) {
+          // Don't escape to surface: skip columns at or above the heightmap
+          int surfaceY = level.getHeight(Heightmap.Types.WORLD_SURFACE, nx, nz);
+          if (walkY >= surfaceY - 1) continue;
           if (tail >= capacity) {
             capacity *= 2;
             queueX = Arrays.copyOf(queueX, capacity);
