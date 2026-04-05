@@ -29,6 +29,9 @@ public class MinimapAssembler {
   /** Dark gray placeholder for chunks not yet scanned (ABGR format). */
   private static final int PLACEHOLDER = ChunkScanner.abgrFromArgb(0xFF1A1A1A);
 
+  /** Wall color for cave mode solid columns (ABGR format). */
+  private static final int WALL_COLOR = ChunkScanner.abgrFromArgb(0xFF000000);
+
   // -- Pre-allocated viewport arrays (recreated when mapSize changes) --
 
   private int allocatedSize = -1;
@@ -37,6 +40,7 @@ public class MinimapAssembler {
   private int[] vWaterDepths;
   private int[] vWaterTints;
   private boolean[] vIsLeaf;
+  private boolean[] vIsWall;
   private boolean[] vHasData;
 
   // Per-frame shading state (set in shade(), read by compute methods)
@@ -73,6 +77,7 @@ public class MinimapAssembler {
     vWaterDepths = new int[len];
     vWaterTints = new int[len];
     vIsLeaf = new boolean[len];
+    vIsWall = new boolean[len];
     vHasData = new boolean[len];
     allocatedSize = mapSize;
   }
@@ -116,6 +121,7 @@ public class MinimapAssembler {
           vWaterDepths[i] = lastData.getWaterDepth(lx, lz);
           vWaterTints[i] = lastData.getWaterTint(lx, lz);
           vIsLeaf[i] = lastData.isLeaf(lx, lz);
+          vIsWall[i] = lastData.isWall(lx, lz);
           vHasData[i] = true;
         } else {
           vHasData[i] = false;
@@ -171,6 +177,10 @@ public class MinimapAssembler {
 
         if (!vHasData[i]) {
           image.setPixelRGBA(px, pz, PLACEHOLDER);
+          continue;
+        }
+        if (vIsWall[i]) {
+          image.setPixelRGBA(px, pz, WALL_COLOR);
           continue;
         }
 
@@ -241,6 +251,10 @@ public class MinimapAssembler {
 
         if (!vHasData[i]) {
           image.setPixelRGBA(px, pz, PLACEHOLDER);
+          continue;
+        }
+        if (vIsWall[i]) {
+          image.setPixelRGBA(px, pz, WALL_COLOR);
           continue;
         }
 
@@ -362,7 +376,8 @@ public class MinimapAssembler {
     if (px < 0 || pz < 0 || px >= mapSize || pz >= mapSize) return fallback;
 
     int i = px * mapSize + pz;
-    return vHasData[i] ? vHeights[i] : fallback;
+    if (!vHasData[i] || vIsWall[i]) return fallback;
+    return vHeights[i];
   }
 
   // -- Color math --

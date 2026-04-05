@@ -15,6 +15,15 @@ import net.minecraft.world.level.chunk.LevelChunk;
  * is deferred to the viewport assembler where the full visible heightfield
  * eliminates chunk boundary seams by design.
  *
+ * <p>Supports two scan modes: surface (top-down from sky) and cave (flood-fill
+ * reachability from player position). Switching modes triggers a full cache
+ * clear, flood fill, and immediate rescan.
+ *
+ * <p>In cave mode, a {@link CaveFloodFill} determines which columns are
+ * reachable from the player. The flood re-runs when the player moves
+ * significantly (3+ blocks) or changes Y band. The flood result serves as
+ * a "cave heightmap" that the scanner uses instead of WORLD_SURFACE.
+ *
  * <p>Chunks are enqueued on {@code ChunkEvent.Load} and scanned at a rate
  * of {@link #CHUNKS_PER_TICK} per client tick to avoid frame drops when many
  * chunks arrive at once. The 3x3 area around the player is periodically
@@ -30,10 +39,26 @@ public final class ChunkColorCache {
   private static final int RESCAN_PLAYER_CHUNK_INTERVAL = 4;
   private static final int RESCAN_ADJACENT_INTERVAL = 20;
 
+  /** How far the player must move before cave flood is recomputed. */
+  private static final int CAVE_REFLOOD_DISTANCE = 3;
+
+  /** Y distance that triggers cave reflood (handles vertical movement in caves). */
+  private static final int CAVE_REFLOOD_Y_THRESHOLD = 4;
+
+  /** Flood fill radius in blocks (covers minimap visible area at 1x zoom). */
+  private static final int CAVE_FLOOD_RADIUS = 100;
+
   private final Long2ObjectOpenHashMap<ChunkColorData> cache = new Long2ObjectOpenHashMap<>();
   private final ArrayDeque<ChunkAccess> scanQueue = new ArrayDeque<>();
   private int tickCounter = 0;
   private boolean dirty = false;
+
+  // Cave mode state
+  private boolean caveMode = false;
+  private CaveFloodFill.Result floodResult = CaveFloodFill.EMPTY;
+  private int lastFloodX = Integer.MIN_VALUE;
+  private int lastFloodY = Integer.MIN_VALUE;
+  private int lastFloodZ = Integer.MIN_VALUE;
 
   public void enqueueChunk(ChunkAccess chunk) {
     scanQueue.addLast(chunk);
@@ -51,14 +76,46 @@ public final class ChunkColorCache {
     dirty = true;
   }
 
+  /** Returns the last flood fill result (for debug display). */
+  public CaveFloodFill.Result getFloodResult() {
+    return floodResult;
+  }
+
   /**
    * Process the scan queue and handle periodic re-scans.
+   *
+   * @param caveMode true to use flood-fill-based cave scanning
    * @return true if any chunk data was updated this tick
    */
-  public boolean tick(Level level, BlockPos playerPos) {
-    dirty = false;
+  public boolean tick(Level level, BlockPos playerPos, boolean caveMode) {
+    boolean modeChanged = caveMode != this.caveMode;
+    this.caveMode = caveMode;
+
+    if (modeChanged) {
+      tickCounter = 0;
+      floodResult = CaveFloodFill.EMPTY;
+      lastFloodX = Integer.MIN_VALUE;
+      cache.clear();
+      scanQueue.clear();
+
+      if (!caveMode) {
+        // Leaving cave mode: rescan surface immediately
+        rescanNearby(level, playerPos);
+      }
+      // Entering cave mode: maybeReflood below will flood + rescan
+    }
+
+    // In cave mode, re-flood when the player moves significantly
+    boolean reflooded = false;
+    if (caveMode) {
+      reflooded = maybeReflood(level, playerPos);
+    }
+
+    dirty = modeChanged || reflooded;
     processQueue(level);
-    handlePeriodicRescan(level, playerPos);
+    if (!reflooded) {
+      handlePeriodicRescan(level, playerPos);
+    }
     tickCounter++;
     return dirty;
   }
@@ -66,6 +123,41 @@ public final class ChunkColorCache {
   /** Lookup by long key; this avoids ChunkPos allocation in the assembler hot path. */
   public ChunkColorData get(int chunkX, int chunkZ) {
     return cache.get(ChunkPos.asLong(chunkX, chunkZ));
+  }
+
+  /**
+   * Re-runs the flood fill if the player has moved far enough from the last
+   * flood origin. Rescans the visible area with the new flood result.
+   *
+   * @return true if a reflood was triggered
+   */
+  private boolean maybeReflood(Level level, BlockPos playerPos) {
+    int px = playerPos.getX();
+    int py = playerPos.getY();
+    int pz = playerPos.getZ();
+
+    int dx = px - lastFloodX;
+    int dy = py - lastFloodY;
+    int dz = pz - lastFloodZ;
+    int distXZSq = dx * dx + dz * dz;
+
+    if (lastFloodX == Integer.MIN_VALUE
+        || distXZSq > CAVE_REFLOOD_DISTANCE * CAVE_REFLOOD_DISTANCE
+        || Math.abs(dy) > CAVE_REFLOOD_Y_THRESHOLD) {
+
+      floodResult = CaveFloodFill.flood(level, playerPos, CAVE_FLOOD_RADIUS);
+      lastFloodX = px;
+      lastFloodY = py;
+      lastFloodZ = pz;
+
+      // Rescan visible area with the new flood result.
+      // Old cache entries get overwritten, no clear needed (avoids map flash).
+      scanQueue.clear();
+      rescanNearby(level, playerPos);
+      return true;
+    }
+
+    return false;
   }
 
   private void processQueue(Level level) {
@@ -93,7 +185,7 @@ public final class ChunkColorCache {
       int cx = chunk.getPos().x;
       int cz = chunk.getPos().z;
 
-      ChunkColorData data = ChunkScanner.scan(chunk, level);
+      ChunkColorData data = scanChunk(chunk, level);
       cache.put(ChunkPos.asLong(cx, cz), data);
       dirty = true;
       processed++;
@@ -109,7 +201,7 @@ public final class ChunkColorCache {
     if (tickCounter % RESCAN_PLAYER_CHUNK_INTERVAL == 0
         && level.hasChunk(chunkX, chunkZ)) {
       ChunkAccess chunk = level.getChunk(chunkX, chunkZ);
-      ChunkColorData data = ChunkScanner.scan(chunk, level);
+      ChunkColorData data = scanChunk(chunk, level);
       cache.put(ChunkPos.asLong(chunkX, chunkZ), data);
       dirty = true;
     }
@@ -123,10 +215,37 @@ public final class ChunkColorCache {
           int nx = chunkX + dx;
           int nz = chunkZ + dz;
           if (level.hasChunk(nx, nz)) {
-            ChunkColorData data = ChunkScanner.scan(level.getChunk(nx, nz), level);
+            ChunkColorData data = scanChunk(level.getChunk(nx, nz), level);
             cache.put(ChunkPos.asLong(nx, nz), data);
             dirty = true;
           }
+        }
+      }
+    }
+  }
+
+  /** Scans a chunk using the current mode (surface or cave). */
+  private ChunkColorData scanChunk(ChunkAccess chunk, Level level) {
+    return caveMode
+        ? ChunkScanner.scanCave(chunk, level, floodResult)
+        : ChunkScanner.scan(chunk, level);
+  }
+
+  /**
+   * Immediately scans a wide area around the player so the minimap isn't
+   * blank while waiting for periodic rescans.
+   */
+  private void rescanNearby(Level level, BlockPos playerPos) {
+    int cx = playerPos.getX() >> 4;
+    int cz = playerPos.getZ() >> 4;
+    int radius = CAVE_FLOOD_RADIUS / 16 + 1;
+
+    for (int dx = -radius; dx <= radius; dx++) {
+      for (int dz = -radius; dz <= radius; dz++) {
+        int nx = cx + dx;
+        int nz = cz + dz;
+        if (level.hasChunk(nx, nz)) {
+          cache.put(ChunkPos.asLong(nx, nz), scanChunk(level.getChunk(nx, nz), level));
         }
       }
     }

@@ -49,8 +49,8 @@ public final class ChunkScanner {
   }
 
   /**
-   * Scans a chunk and produces raw column data: base colors, heights, water
-   * metadata, and leaf flags. No shading is applied.
+   * Scans a chunk from the surface downward. Produces raw column data: base
+   * colors, heights, water metadata, and leaf flags. No shading is applied.
    */
   public static ChunkColorData scan(ChunkAccess chunk, Level level) {
     int[] baseColors = new int[ChunkColorData.PIXELS];
@@ -75,35 +75,98 @@ public final class ChunkScanner {
 
         mutable.set(worldX, surfaceY, worldZ);
         ColumnResult col = scanColumn(level, mutable, surfaceY);
-
-        heights[idx] = col.blockY;
-
-        if (col.isEmpty()) {
-          baseColors[idx] = 0xFF000000;
-          continue;
-        }
-
-        mutable.set(worldX, col.blockY, worldZ);
-        int color = getBlockColor(blockColors, level, mutable, col.block);
-        if (color == 0) {
-          baseColors[idx] = 0xFF000000;
-          continue;
-        }
-
-        baseColors[idx] = color;
-        waterDepths[idx] = col.waterDepth;
-        isLeaf[idx] = col.block.getBlock() instanceof LeavesBlock;
-
-        // Capture biome water tint at scan time so the assembler
-        // doesn't need Level access during the shade pass
-        if (col.isWater()) {
-          mutable.set(worldX, col.waterSurfaceY, worldZ);
-          waterTints[idx] = level.getBlockTint(mutable, BiomeColors.WATER_COLOR_RESOLVER);
-        }
+        processColumn(blockColors, level, mutable, worldX, worldZ, col, idx,
+            baseColors, heights, waterDepths, waterTints, isLeaf);
       }
     }
 
     return new ChunkColorData(baseColors, heights, waterDepths, waterTints, isLeaf);
+  }
+
+  /**
+   * Scans a chunk for cave mode using a pre-computed flood fill result.
+   *
+   * <p>The flood fill determines which (x, z) columns are reachable from the
+   * player and at what walking Y. This method uses that as a "cave heightmap":
+   * reachable columns get scanned downward from their walking Y (same pipeline
+   * as surface mode), non-reachable columns are walls.
+   *
+   * <p>This produces the same data format as {@link #scan}, so the assembler's
+   * shading pipeline (heightfield normals, AO, water blending) works unchanged.
+   *
+   * @param flood the pre-computed flood fill result with reachable columns
+   */
+  public static ChunkColorData scanCave(
+      ChunkAccess chunk, Level level, CaveFloodFill.Result flood) {
+
+    int[] baseColors = new int[ChunkColorData.PIXELS];
+    int[] heights = new int[ChunkColorData.PIXELS];
+    int[] waterDepths = new int[ChunkColorData.PIXELS];
+    int[] waterTints = new int[ChunkColorData.PIXELS];
+    boolean[] isLeaf = new boolean[ChunkColorData.PIXELS];
+    boolean[] isWall = new boolean[ChunkColorData.PIXELS];
+
+    int chunkWorldX = chunk.getPos().getMinBlockX();
+    int chunkWorldZ = chunk.getPos().getMinBlockZ();
+
+    BlockPos.MutableBlockPos mutable = new BlockPos.MutableBlockPos();
+    BlockColors blockColors = Minecraft.getInstance().getBlockColors();
+
+    for (int localX = 0; localX < 16; localX++) {
+      int worldX = chunkWorldX + localX;
+
+      for (int localZ = 0; localZ < 16; localZ++) {
+        int worldZ = chunkWorldZ + localZ;
+        int idx = localX * 16 + localZ;
+
+        if (!flood.isReachable(worldX, worldZ)) {
+          isWall[idx] = true;
+          baseColors[idx] = 0xFF000000;
+          continue;
+        }
+
+        int walkingY = flood.getWalkingY(worldX, worldZ);
+        mutable.set(worldX, walkingY, worldZ);
+        ColumnResult col = scanColumn(level, mutable, walkingY);
+        processColumn(blockColors, level, mutable, worldX, worldZ, col, idx,
+            baseColors, heights, waterDepths, waterTints, isLeaf);
+      }
+    }
+
+    return new ChunkColorData(baseColors, heights, waterDepths, waterTints, isLeaf, isWall);
+  }
+
+  /**
+   * Extracts colors, heights, water data, and leaf flags from a scanned column
+   * into the output arrays. Shared between surface and cave scan modes.
+   */
+  private static void processColumn(
+      BlockColors blockColors, Level level, BlockPos.MutableBlockPos mutable,
+      int worldX, int worldZ, ColumnResult col, int idx,
+      int[] baseColors, int[] heights, int[] waterDepths, int[] waterTints, boolean[] isLeaf) {
+
+    heights[idx] = col.blockY;
+
+    if (col.isEmpty()) {
+      baseColors[idx] = 0xFF000000;
+      return;
+    }
+
+    mutable.set(worldX, col.blockY, worldZ);
+    int color = getBlockColor(blockColors, level, mutable, col.block);
+    if (color == 0) {
+      baseColors[idx] = 0xFF000000;
+      return;
+    }
+
+    baseColors[idx] = color;
+    waterDepths[idx] = col.waterDepth;
+    isLeaf[idx] = col.block.getBlock() instanceof LeavesBlock;
+
+    if (col.isWater()) {
+      mutable.set(worldX, col.waterSurfaceY, worldZ);
+      waterTints[idx] = level.getBlockTint(mutable, BiomeColors.WATER_COLOR_RESOLVER);
+    }
   }
 
   /**

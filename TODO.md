@@ -7,25 +7,6 @@ Everything related to the minimap: rendering, visuals, data, and interaction.
 #### Open tweaks
 
 - [ ] Tune height/edge shading factors after more play-testing
-- [ ] Short grass: `SKIP_BLOCKS` logic is correct but may still look visually noisy
-- [ ] Water chunk border seams: row 0 gets NORMAL brightness when north neighbor is not yet cached, causing visible lighter borders on water that only correct on rescan
-
-### Iteration 4: Viewport-First Renderer + Heightfield Lighting
-
-Architectural refactor for better visuals and cleaner shading logic.
-
-#### Viewport-first renderer
-
-- [x] Cache raw column data (base color, rendered height, water metadata) instead of final shaded colors
-- [x] Shade during assembly in one continuous pass over the visible viewport
-- [x] Chunk seams become impossible since shading never crosses cache boundaries
-
-#### Heightfield lighting
-
-- [x] Compute smoothed heightfield normals/gradients from the visible viewport
-- [x] Directional light + ambient term for natural terrain relief
-- [x] AO term for valleys and overhangs (config-togglable)
-- [x] Apply material color and water tint last
 
 #### Tuning (needs play-testing)
 
@@ -37,13 +18,43 @@ Play-test in varied terrain and decide on final defaults for:
 - [ ] Terrain: height scale, height min/max, leaf shade
 - [ ] Water: base alpha, per-depth, max alpha
 
-### Iteration 5: Map Polish
+### Iteration 5: Cave Mode
+
+Flood-fill reachability from player position determines visible space.
+Reuses the full surface rendering pipeline (shading, AO, water blending).
+Walls are black, floors are colored by the block underfoot.
+
+- [x] Underground detection: WORLD_SURFACE heightmap with hysteresis
+- [x] Flood fill reachability: 2D BFS with step delta 2, radius 100
+- [x] Floor coloring: reuses surface scanColumn pipeline
+- [x] Wall rendering: black for non-reachable columns
+- [x] Config: cave auto-switch toggle (on/off)
+- [x] Cave stats overlay provider (configurable info line)
+- [x] Live-only visibility (no persistence yet, fog of war is iteration 6+)
+- [ ] Surface/cave indicator on map frame
+- [ ] Nether dimension handling (always cave mode? ceiling detection?)
+- [ ] End dimension handling (never cave mode? open sky detection?)
+
+### Iteration 6: Map Polish + Expanded View
 
 - [ ] Chunk boundary lines (toggleable)
 - [ ] North indicator on map frame
-- [ ] Persistence: save chunk color cache to disk for explored areas
+- [ ] Fog of war: track explored areas, dim visited regions, black for unexplored
+  - [ ] Applies to both surface and cave modes
+  - [ ] Persistence: save explored state to disk per dimension
+- [ ] Fullscreen/expanded map view (keybind to open)
+- [ ] Keybinds: toggle minimap visibility, zoom, cave mode toggle
+- [ ] Mouse interaction in expanded view (scroll zoom, drag pan)
+- [ ] Biome tint strength config option
 
 ### Backlog
+
+#### Waypoints (ties into CustomPortalsFoxified)
+
+- [ ] Right-click map to place waypoint
+- [ ] Death marker auto-placed on death
+- [ ] Portal-linked waypoints (integration with CustomPortalsFoxified)
+- [ ] Waypoint rendering on minimap and expanded view
 
 #### Server-Side Player Radar (optional install)
 

@@ -72,9 +72,9 @@ public final class MinimapLayer {
 
     if (mc.options.hideGui || mc.getDebugOverlay().showDebugScreen()) return;
 
-    // All config values cached per-tick by MinimapKeybinds, no config tree traversal here
-    int configSize = MinimapKeybinds.getDisplaySize();
-    float aspectRatio = MinimapKeybinds.getAspectRatio();
+    // All config values cached per-tick by MinimapConfigCache, no config tree traversal here
+    int configSize = MinimapConfigCache.getDisplaySize();
+    float aspectRatio = MinimapConfigCache.getAspectRatio();
     int displayW = configSize;
     int displayH = Math.round(configSize / aspectRatio);
     int texSize = displayW;
@@ -88,16 +88,18 @@ public final class MinimapLayer {
 
     ChunkColorCache cache = ChunkCacheEventHandler.getCache();
     boolean cacheUpdated = ChunkCacheEventHandler.consumeDirty();
-    int seaLevel = player.level().getSeaLevel();
-    RenderConfig renderConfig = MinimapKeybinds.getRenderConfig();
-    ResourceLocation texId = renderer.update(playerX, playerZ, cache, cacheUpdated, scale, texSize, seaLevel, renderConfig);
+    // In cave mode, heights are relative to the player's Y level instead of sea level
+    boolean caveMode = CaveModeTracker.isCaveMode();
+    int heightRef = caveMode ? CaveModeTracker.getPlayerY() : player.level().getSeaLevel();
+    RenderConfig renderConfig = MinimapConfigCache.getRenderConfig();
+    ResourceLocation texId = renderer.update(playerX, playerZ, cache, cacheUpdated, scale, texSize, heightRef, renderConfig);
     lastTextureId = texId;
     if (texId == null) return;
 
     int screenW = graphics.guiWidth();
     int screenH = graphics.guiHeight();
 
-    MapnHudConfig.ScreenCorner corner = MinimapKeybinds.getPosition();
+    MapnHudConfig.ScreenCorner corner = MinimapConfigCache.getPosition();
     int mapX, mapY;
     switch (corner) {
       case TOP_LEFT -> { mapX = MARGIN; mapY = MARGIN; }
@@ -109,7 +111,7 @@ public final class MinimapLayer {
     int centerY = mapY + displayH / 2;
 
     float rotation;
-    if (MinimapKeybinds.isNorthLocked()) {
+    if (MinimapConfigCache.isNorthLocked()) {
       rotation = 0.0f;
     } else {
       float yaw = player.getYRot();
@@ -142,7 +144,7 @@ public final class MinimapLayer {
         offsetZ - texSize / 2.0f,
         0);
 
-    float opacity = MinimapKeybinds.getOpacity();
+    float opacity = MinimapConfigCache.getOpacity();
     RenderSystem.setShaderTexture(0, texId);
     RenderSystem.setShader(GameRenderer::getPositionTexShader);
     RenderSystem.setShaderColor(1.0f, 1.0f, 1.0f, opacity);

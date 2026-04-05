@@ -22,6 +22,7 @@ public final class InfoProviders {
     register(new FpsProvider());
     register(new SpeedProvider());
     register(new ChunkCoordsProvider());
+    register(new CaveStatsProvider());
   }
 
   private static void register(InfoProvider provider) {

@@ -4,7 +4,7 @@ import dev.mapnhud.client.MapnHudConfig;
 import dev.mapnhud.client.MapnHudConfig.OverlayAlign;
 import dev.mapnhud.client.MapnHudConfig.OverlayPosition;
 import dev.mapnhud.client.MapnHudConfig.ScreenCorner;
-import dev.mapnhud.client.MinimapKeybinds;
+import dev.mapnhud.client.MinimapConfigCache;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -90,7 +90,7 @@ public final class InfoOverlayRenderer {
     int blockHeight = cachedLines.size() * scaledLineH + PADDING;
 
     // Compute position based on overlay position setting and map corner
-    ScreenCorner corner = MinimapKeybinds.getPosition();
+    ScreenCorner corner = MinimapConfigCache.getPosition();
     boolean mapOnTop = corner == ScreenCorner.TOP_LEFT || corner == ScreenCorner.TOP_RIGHT;
     boolean mapOnRight = corner == ScreenCorner.TOP_RIGHT || corner == ScreenCorner.BOTTOM_RIGHT;
     int x, y;

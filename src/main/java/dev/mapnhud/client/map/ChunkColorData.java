@@ -22,15 +22,23 @@ public final class ChunkColorData {
   private final int[] waterDepths;  // 0 = dry, >0 = water block count
   private final int[] waterTints;   // biome water ARGB (0 when dry)
   private final boolean[] isLeaf;   // true when rendered block is LeavesBlock
+  private final boolean[] isWall;   // null in surface mode; true per-column for walls (cave mode)
 
   public ChunkColorData(
       int[] baseColors, int[] heights, int[] waterDepths,
       int[] waterTints, boolean[] isLeaf) {
+    this(baseColors, heights, waterDepths, waterTints, isLeaf, null);
+  }
+
+  public ChunkColorData(
+      int[] baseColors, int[] heights, int[] waterDepths,
+      int[] waterTints, boolean[] isLeaf, boolean[] isWall) {
     this.baseColors = baseColors;
     this.heights = heights;
     this.waterDepths = waterDepths;
     this.waterTints = waterTints;
     this.isLeaf = isLeaf;
+    this.isWall = isWall;
   }
 
   public int getBaseColor(int localX, int localZ) {
@@ -51,5 +59,9 @@ public final class ChunkColorData {
 
   public boolean isLeaf(int localX, int localZ) {
     return isLeaf[localX * SIZE + localZ];
+  }
+
+  public boolean isWall(int localX, int localZ) {
+    return isWall != null && isWall[localX * SIZE + localZ];
   }
 }

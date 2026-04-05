@@ -21,6 +21,9 @@ public final class MapnHudConfig {
   public static final ModConfigSpec.IntValue MAP_SIZE;
   public static final ModConfigSpec.DoubleValue MAP_SHAPE;
 
+  // -- Cave --
+  public static final ModConfigSpec.BooleanValue CAVE_MODE_ENABLED;
+
   // -- Rendering --
   public static final ModConfigSpec.EnumValue<ShadingMode> RENDER_SHADING_MODE;
   public static final ModConfigSpec.IntValue RENDER_LIGHT_ANGLE;
@@ -87,6 +90,14 @@ public final class MapnHudConfig {
     MAP_SHAPE = builder
         .comment("Map width-to-height ratio. 1.0 = square, 1.5 = 3:2 wide.")
         .defineInRange("shape", 1.0, 1.0, 2.0);
+
+    builder.pop();
+
+    builder.push("cave");
+
+    CAVE_MODE_ENABLED = builder
+        .comment("Auto-switch to cave view when underground. When off, the surface map is always shown.")
+        .define("enabled", true);
 
     builder.pop();
 
@@ -200,7 +211,7 @@ public final class MapnHudConfig {
         .comment("Display order of all overlay lines (enabled and disabled).")
         .defineList("order", List.of(
             "coordinates", "biome", "time", "weather", "light",
-            "dimension", "compass", "fps", "speed", "chunk"),
+            "dimension", "compass", "fps", "speed", "chunk", "cave_stats"),
             () -> "", o -> o instanceof String);
 
     OVERLAY_ENABLED = builder

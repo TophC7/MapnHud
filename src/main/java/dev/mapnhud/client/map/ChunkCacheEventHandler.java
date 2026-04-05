@@ -59,6 +59,7 @@ public final class ChunkCacheEventHandler {
       BlockColorExtractor.rebuild();
     }
 
-    cacheUpdatedThisTick = CACHE.tick(mc.level, mc.player.blockPosition());
+    boolean caveMode = dev.mapnhud.client.CaveModeTracker.isCaveMode();
+    cacheUpdatedThisTick = CACHE.tick(mc.level, mc.player.blockPosition(), caveMode);
   }
 }
