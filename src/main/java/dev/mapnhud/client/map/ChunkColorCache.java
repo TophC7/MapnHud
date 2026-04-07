@@ -332,6 +332,12 @@ public final class ChunkColorCache {
   private void scanChunkAt(Level level, int chunkX, int chunkZ, ScanSource source) {
     if (!level.hasChunk(chunkX, chunkZ)) return;
     ChunkAccess chunk = level.getChunk(chunkX, chunkZ);
+    // Guard against ClientChunkCache returning the singleton EmptyLevelChunk
+    // (constructed at (0,0)) when hasChunk and getChunk disagree. Without
+    // this, periodic rescans of any chunk that has fallen out of FULL status
+    // would scan blocks at (0,0) and store them under (chunkX,chunkZ).
+    ChunkPos pos = chunk.getPos();
+    if (pos.x != chunkX || pos.z != chunkZ) return;
     ChunkColorData data = scanChunk(chunk, level, source);
     putData(chunkX, chunkZ, data);
   }
@@ -498,7 +504,12 @@ public final class ChunkColorCache {
     ChunkPos pos = chunk.getPos();
     if (level.hasChunk(pos.x, pos.z)) {
       ChunkAccess resolved = level.getChunk(pos.x, pos.z);
-      if (resolved instanceof LevelChunk lc) return lc;
+      if (resolved instanceof LevelChunk lc) {
+        // Same EmptyLevelChunk(0,0) trap as getLoadedLevelChunk — verify the
+        // resolved chunk actually matches the position we asked for.
+        ChunkPos rpos = lc.getPos();
+        if (rpos.x == pos.x && rpos.z == pos.z) return lc;
+      }
     }
     return null;
   }
@@ -506,7 +517,16 @@ public final class ChunkColorCache {
   private static LevelChunk getLoadedLevelChunk(Level level, int chunkX, int chunkZ) {
     if (!level.hasChunk(chunkX, chunkZ)) return null;
     ChunkAccess resolved = level.getChunk(chunkX, chunkZ);
-    return resolved instanceof LevelChunk lc ? lc : null;
+    if (!(resolved instanceof LevelChunk lc)) return null;
+    // ClientChunkCache returns a singleton EmptyLevelChunk (constructed with
+    // ChunkPos(0,0)) when the requested chunk isn't in storage at FULL status.
+    // hasChunk and getChunk take different paths and can disagree, so we have
+    // to verify the returned chunk's position actually matches what we asked
+    // for. Without this check, scanCave reads blocks at (0,0) and putData
+    // stores them under the original (chunkX,chunkZ) — that's the cave smear bug.
+    ChunkPos pos = lc.getPos();
+    if (pos.x != chunkX || pos.z != chunkZ) return null;
+    return lc;
   }
 
   private int floodRadiusChunks() {
