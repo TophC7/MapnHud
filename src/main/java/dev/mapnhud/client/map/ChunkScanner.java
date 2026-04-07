@@ -81,7 +81,7 @@ public final class ChunkScanner {
       }
     }
 
-    return new ChunkColorData(baseColors, heights, waterDepths, waterTints, isLeaf);
+    return ChunkColorData.surface(baseColors, heights, waterDepths, waterTints, isLeaf);
   }
 
   /**
@@ -100,54 +100,13 @@ public final class ChunkScanner {
   public static ChunkColorData scanCave(
       ChunkAccess chunk, Level level, CaveFloodFill.Result flood) {
 
-    int chunkX = chunk.getPos().x;
-    int chunkZ = chunk.getPos().z;
     int chunkWorldX = chunk.getPos().getMinBlockX();
     int chunkWorldZ = chunk.getPos().getMinBlockZ();
-    boolean chunkUnknown = flood.isUnknownChunk(chunkX, chunkZ);
     boolean floodComplete = flood.complete();
 
-    // Skip fully unreachable chunks unless they are currently unknown frontier.
-    boolean anyReachable = false;
-    boolean anyInsideRadius = false;
-    for (int lx = 0; lx < 16; lx++) {
-      for (int lz = 0; lz < 16; lz++) {
-        int worldX = chunkWorldX + lx;
-        int worldZ = chunkWorldZ + lz;
-        if (!flood.isOutsideRadius(worldX, worldZ)) {
-          anyInsideRadius = true;
-        }
-        if (flood.isReachable(worldX, worldZ)) {
-          anyReachable = true;
-        }
-      }
-    }
-    if (!anyReachable) {
-      if (!anyInsideRadius && !chunkUnknown) return null;
-
-      boolean[] known = new boolean[ChunkColorData.PIXELS];
-      byte[] fieldStates = new byte[ChunkColorData.PIXELS];
-      for (int lx = 0; lx < 16; lx++) {
-        int worldX = chunkWorldX + lx;
-        for (int lz = 0; lz < 16; lz++) {
-          int worldZ = chunkWorldZ + lz;
-          int idx = lx * 16 + lz;
-          boolean outsideRadius = flood.isOutsideRadius(worldX, worldZ);
-          fieldStates[idx] = (!floodComplete || chunkUnknown || outsideRadius)
-              ? CaveFieldState.UNKNOWN
-              : CaveFieldState.BOUNDARY;
-        }
-      }
-      return new ChunkColorData(
-          new int[ChunkColorData.PIXELS],
-          new int[ChunkColorData.PIXELS],
-          new int[ChunkColorData.PIXELS],
-          new int[ChunkColorData.PIXELS],
-          new boolean[ChunkColorData.PIXELS],
-          known,
-          fieldStates);
-    }
-
+    // Single pass: scan reachable columns into the output arrays, classify
+    // non-reachable columns into field states, and track whether the chunk
+    // has anything worth keeping.
     int[] baseColors = new int[ChunkColorData.PIXELS];
     int[] heights = new int[ChunkColorData.PIXELS];
     int[] waterDepths = new int[ChunkColorData.PIXELS];
@@ -159,6 +118,9 @@ public final class ChunkScanner {
     BlockPos.MutableBlockPos mutable = new BlockPos.MutableBlockPos();
     BlockColors blockColors = Minecraft.getInstance().getBlockColors();
 
+    boolean anyReachable = false;
+    boolean anyInsideRadius = false;
+
     for (int localX = 0; localX < 16; localX++) {
       int worldX = chunkWorldX + localX;
 
@@ -166,25 +128,30 @@ public final class ChunkScanner {
         int worldZ = chunkWorldZ + localZ;
         int idx = localX * 16 + localZ;
 
-        if (!flood.isReachable(worldX, worldZ)) {
-          boolean outsideRadius = flood.isOutsideRadius(worldX, worldZ);
-          fieldStates[idx] = (!floodComplete || chunkUnknown || outsideRadius)
+        boolean outsideRadius = flood.isOutsideRadius(worldX, worldZ);
+        if (!outsideRadius) anyInsideRadius = true;
+
+        if (flood.isReachable(worldX, worldZ)) {
+          anyReachable = true;
+          int walkingY = flood.getWalkingY(worldX, worldZ);
+          mutable.set(worldX, walkingY, worldZ);
+          ColumnResult col = scanColumn(level, mutable, walkingY);
+          processColumn(blockColors, level, mutable, worldX, worldZ, col, idx,
+              baseColors, heights, waterDepths, waterTints, isLeaf);
+          known[idx] = true;
+          fieldStates[idx] = CaveFieldState.REACHABLE;
+        } else {
+          fieldStates[idx] = (!floodComplete || outsideRadius)
               ? CaveFieldState.UNKNOWN
               : CaveFieldState.BOUNDARY;
-          continue;
         }
-
-        int walkingY = flood.getWalkingY(worldX, worldZ);
-        mutable.set(worldX, walkingY, worldZ);
-        ColumnResult col = scanColumn(level, mutable, walkingY);
-        processColumn(blockColors, level, mutable, worldX, worldZ, col, idx,
-            baseColors, heights, waterDepths, waterTints, isLeaf);
-        known[idx] = true;
-        fieldStates[idx] = CaveFieldState.REACHABLE;
       }
     }
 
-    return new ChunkColorData(
+    // Fully unreachable chunk far from the flood: nothing to learn here yet.
+    if (!anyReachable && !anyInsideRadius) return null;
+
+    return ChunkColorData.cave(
         baseColors, heights, waterDepths, waterTints, isLeaf, known, fieldStates);
   }
 

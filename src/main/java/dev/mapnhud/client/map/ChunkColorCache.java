@@ -45,17 +45,24 @@ public final class ChunkColorCache {
    */
   private static final int REFLOOD_CHUNKS_PER_TICK = 128;
 
-  /** Time budget for event queue processing per tick. */
+  /** Time budget for event queue processing per tick (~2ms of a 50ms tick). */
   private static final long SCAN_BUDGET_NANOS = 2_000_000L;
 
-  /** Time budget for reflood queue processing per tick. */
+  /** Time budget for reflood queue processing per tick (~4ms of a 50ms tick). */
   private static final long REFLOOD_BUDGET_NANOS = 4_000_000L;
 
+  /** Rescan the player's own chunk every N ticks to catch fast block updates. */
   private static final int RESCAN_PLAYER_CHUNK_INTERVAL = 4;
+  /** Rescan the 8 surrounding chunks every N ticks. Slower than the player chunk. */
   private static final int RESCAN_ADJACENT_INTERVAL = 20;
 
-  /** Save dirty chunks to disk every 60 seconds. */
+  /** Save dirty chunks to disk every 60 seconds (1200 ticks @ 20 TPS). */
   private static final int SAVE_INTERVAL = 1200;
+  /**
+   * Max times an enqueued ProtoChunk is retried before being dropped, with
+   * exponential backoff capped at {@link #MAX_SCAN_RETRY_DELAY_TICKS}.
+   * Total retry window: ~80 ticks (~4 seconds) before drop.
+   */
   private static final int MAX_SCAN_RESOLVE_RETRIES = 8;
   private static final int MAX_SCAN_RETRY_DELAY_TICKS = 16;
 
@@ -85,17 +92,18 @@ public final class ChunkColorCache {
   public void enqueueChunk(ChunkAccess chunk) {
     int chunkX = chunk.getPos().x;
     int chunkZ = chunk.getPos().z;
-    boolean priority = caveMode && isNearPlayerChunk(chunkX, chunkZ, caveScanRadiusChunks + 1);
+    int distSq = playerChunkDistanceSq(chunkX, chunkZ);
+    boolean priority = caveMode && distSq <= sq(caveScanRadiusChunks + 1);
 
     if (!queues.enqueueScan(chunk, tickCounter, priority)) {
       if (CaveCacheDiagnostics.ENABLED
-          && isNearPlayerChunk(chunkX, chunkZ, CaveCacheDiagnostics.NEAR_RADIUS_CHUNKS)) {
+          && distSq <= sq(CaveCacheDiagnostics.NEAR_RADIUS_CHUNKS)) {
         diagnostics.noteAnomaly(Anomaly.ENQUEUE_DEDUP_NEAR);
       }
       return;
     }
 
-    if (caveMode && isNearPlayerChunk(chunkX, chunkZ, floodRadiusChunks())) {
+    if (caveMode && distSq <= sq(floodRadiusChunks())) {
       flood.requestRebuild(RebuildReason.CHUNK_LOAD);
     }
   }
@@ -169,68 +177,103 @@ public final class ChunkColorCache {
 
   // -- Tick --
 
+  /**
+   * Drives one game tick of the cache. Returns true if anything that affects
+   * what the renderer would draw has changed since the last tick.
+   *
+   * <p>The body is split into named phases. Each phase either mutates the
+   * shared {@link #dirty} flag (via {@link #putData}) or reports its own
+   * dirty contribution back here.
+   */
   public boolean tick(Level level, BlockPos playerPos, boolean caveMode,
                       int caveScanRadiusChunks, int caveFloodRadiusBlocks) {
     diagnostics.resetTick(tickCounter);
-    this.playerPos = playerPos;
-    this.caveScanRadiusChunks = caveScanRadiusChunks;
-    this.caveFloodRadiusBlocks = caveFloodRadiusBlocks;
+    dirty = false;
+    boolean modeChanged = syncFrameInputs(playerPos, caveMode, caveScanRadiusChunks, caveFloodRadiusBlocks);
 
-    boolean modeChanged = caveMode != this.caveMode;
-    this.caveMode = caveMode;
+    if (modeChanged) handleModeTransition(level);
+    if (caveMode) advanceCaveFlood(level);
 
-    if (modeChanged) {
-      tickCounter = 0;
-      queues.clear();
-      flood.reset();
-      diagnostics.noteAnomaly(Anomaly.MODE_SWITCH);
-      // No cache clear: layers handle mode separation. get() returns
-      // the appropriate layer for the current mode.
-
-      if (!caveMode) {
-        // Leaving cave mode: rescan 3x3 with surface mode for immediate view.
-        rescanImmediate(level, playerPos);
-      }
-    }
-
-    boolean floodAdvanced = false;
-    if (caveMode) {
-      CaveFloodController.TickResult result = flood.tick(level, playerPos, caveFloodRadiusBlocks,
-          tickCounter,
-          queues.priorityQueueSize(), queues.scanQueueSize(),
-          queues.refloodQueueSize(), queues.navQueueSize());
-      floodAdvanced = result.dataChanged();
-      if (result.started()) {
-        rescanImmediate(level, playerPos);
-      }
-      if (result.justCompleted()) {
-        rescanImmediate(level, playerPos);
-        enqueueFloodRadius(level, playerPos);
-      }
-    }
-
-    dirty = modeChanged || floodAdvanced;
-    processScanQueue(level);
-    processRefloodQueue(level);
-    handlePeriodicRescan(level, playerPos);
-
-    if (tickCounter % SAVE_INTERVAL == 0 && tickCounter > 0) {
-      persistence.saveDirty(cache);
-    }
-
-    // Rebuild snapshot at a fixed interval — HUD reads the cached one.
-    // When diagnostics are enabled the periodic logger reuses the same
-    // snapshot rather than building a second one.
-    if (tickCounter % SNAPSHOT_REBUILD_INTERVAL == 0) {
-      CaveCacheDiagnostics.SnapshotContext ctx = snapshotContext(level);
-      cachedSnapshot = diagnostics.buildSnapshot(ctx);
-      if (CaveCacheDiagnostics.ENABLED) {
-        diagnostics.maybeLog(ctx, cachedSnapshot, tickCounter, level, playerPos);
-      }
-    }
+    drainQueues(level);
+    runPeriodicRescans(level);
+    maybePersist();
+    maybeRefreshSnapshot(level);
 
     tickCounter++;
     return dirty;
+  }
+
+  /** Phase 1: copy this tick's inputs into instance state. */
+  private boolean syncFrameInputs(BlockPos playerPos, boolean caveMode,
+                                  int caveScanRadiusChunks, int caveFloodRadiusBlocks) {
+    this.playerPos = playerPos;
+    this.caveScanRadiusChunks = caveScanRadiusChunks;
+    this.caveFloodRadiusBlocks = caveFloodRadiusBlocks;
+    boolean modeChanged = caveMode != this.caveMode;
+    this.caveMode = caveMode;
+    return modeChanged;
+  }
+
+  /**
+   * Phase 2: handle a surface↔cave mode change. Resets per-mode state
+   * (queues, flood) without clearing the cache itself, since the layered
+   * entries are shared between modes.
+   */
+  private void handleModeTransition(Level level) {
+    tickCounter = 0;
+    queues.clear();
+    flood.reset();
+    diagnostics.noteAnomaly(Anomaly.MODE_SWITCH);
+    dirty = true;
+
+    if (!caveMode) {
+      // Leaving cave mode: rescan 3x3 with surface scanner for an immediate
+      // surface view at the player's location.
+      rescanImmediate(level, playerPos);
+    }
+  }
+
+  /** Phase 3: advance the cave flood and run any flood-triggered scans. */
+  private void advanceCaveFlood(Level level) {
+    CaveFloodController.TickResult result = flood.tick(level, playerPos, caveFloodRadiusBlocks,
+        tickCounter,
+        queues.priorityQueueSize(), queues.scanQueueSize(),
+        queues.refloodQueueSize());
+    if (result.dataChanged()) dirty = true;
+    if (result.started()) {
+      rescanImmediate(level, playerPos);
+    }
+    if (result.justCompleted()) {
+      rescanImmediate(level, playerPos);
+      enqueueFloodRadius(level, playerPos);
+    }
+  }
+
+  /** Phase 4: drain the budgeted scan and reflood queues. */
+  private void drainQueues(Level level) {
+    processScanQueue(level);
+    processRefloodQueue(level);
+  }
+
+  /** Phase 6: kick off a save cycle if we hit the save interval. */
+  private void maybePersist() {
+    if (tickCounter % SAVE_INTERVAL == 0 && tickCounter > 0) {
+      persistence.saveDirty(cache);
+    }
+  }
+
+  /**
+   * Phase 7: rebuild the cached debug snapshot for the HUD on a fixed
+   * interval. The periodic logger reuses the same snapshot to avoid
+   * allocating twice.
+   */
+  private void maybeRefreshSnapshot(Level level) {
+    if (tickCounter % SNAPSHOT_REBUILD_INTERVAL != 0) return;
+    CaveCacheDiagnostics.SnapshotContext ctx = snapshotContext(level);
+    cachedSnapshot = diagnostics.buildSnapshot(ctx);
+    if (CaveCacheDiagnostics.ENABLED) {
+      diagnostics.maybeLog(ctx, cachedSnapshot, tickCounter, level, playerPos);
+    }
   }
 
   // -- Scan dispatch --
@@ -266,12 +309,7 @@ public final class ChunkColorCache {
       data = ChunkColorData.mergeCave(existingAtBucket, data);
     }
 
-    if (layerY != CaveLayeredEntry.SURFACE_LAYER
-        && existingAtBucket == null
-        && entry.caveLayerCount() >= CaveLayeredEntry.MAX_CAVE_LAYERS) {
-      entry.evictFarthestCave(playerPos.getY());
-    }
-
+    // CaveLayeredEntry.put handles eviction internally when full.
     entry.put(layerY, data);
     diagnostics.recordCacheWrite();
     persistence.markDirty(chunkX, chunkZ);
@@ -316,7 +354,7 @@ public final class ChunkColorCache {
           int cz = chunk.getPos().z;
           diagnostics.recordEventDrop(cx, cz, queued.attempts(),
               queues.priorityQueueSize(), queues.scanQueueSize(),
-              queues.refloodQueueSize(), queues.navQueueSize());
+              queues.refloodQueueSize());
         } else {
           diagnostics.recordEventRequeue();
         }
@@ -334,6 +372,12 @@ public final class ChunkColorCache {
    * Processes chunks from post-reflood cave scans with a higher budget.
    * Most cave chunks outside the flood radius return null (all-unknown),
    * so the effective cost per chunk is very low.
+   *
+   * <p>Stale-layer entries (queued for a Y bucket the player has since left)
+   * are dropped here. They are not lost data: the next flood completion in
+   * the new bucket calls {@link #enqueueFloodRadius} which re-enqueues every
+   * chunk that lacks coverage at the new bucket. The stale entries simply
+   * drain off the front of the queue.
    */
   private void processRefloodQueue(Level level) {
     if (queues.refloodIsEmpty()) return;
@@ -341,7 +385,8 @@ public final class ChunkColorCache {
       if (queues.refloodIsEmpty()) return false;
       QueuedRefloodChunk queued = queues.pollNextReflood(tickCounter);
       if (queued == null) return false;
-      // A later flood in another Y bucket supersedes this queued scan.
+      // Stale layer (player crossed a Y bucket while this entry waited).
+      // The next flood for the new bucket will re-enqueue what's needed.
       if (queued.layerY() != currentLayerY()) return true;
 
       int chunkX = ChunkPos.getX(queued.chunkKey());
@@ -385,7 +430,8 @@ public final class ChunkColorCache {
 
   // -- Periodic / immediate rescans --
 
-  private void handlePeriodicRescan(Level level, BlockPos playerPos) {
+  /** Phase 5: rescan the player chunk and its 8 neighbors at fixed intervals. */
+  private void runPeriodicRescans(Level level) {
     int chunkX = playerPos.getX() >> 4;
     int chunkZ = playerPos.getZ() >> 4;
 
@@ -468,12 +514,18 @@ public final class ChunkColorCache {
   }
 
   private boolean isNearPlayerChunk(int chunkX, int chunkZ, int radiusChunks) {
+    return playerChunkDistanceSq(chunkX, chunkZ) <= sq(radiusChunks);
+  }
+
+  private int playerChunkDistanceSq(int chunkX, int chunkZ) {
     int pcx = playerPos.getX() >> 4;
     int pcz = playerPos.getZ() >> 4;
     int dx = chunkX - pcx;
     int dz = chunkZ - pcz;
-    return dx * dx + dz * dz <= radiusChunks * radiusChunks;
+    return dx * dx + dz * dz;
   }
+
+  private static int sq(int x) { return x * x; }
 
   // -- Diagnostics context bridge --
 
@@ -482,8 +534,8 @@ public final class ChunkColorCache {
         level, caveMode,
         playerPos.getX() >> 4, playerPos.getZ() >> 4,
         queues.priorityQueueSize(), queues.scanQueueSize(),
-        queues.refloodQueueSize(), queues.navQueueSize(),
-        queues.scanQueuedSize(), queues.navQueuedSize(),
+        queues.refloodQueueSize(),
+        queues.scanQueuedSize(),
         queues.nextPriorityEligibleTick(), queues.nextScanEligibleTick(),
         flood.isActive(), flood.isComplete(),
         flood.currentResult(), this::get);

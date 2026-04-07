@@ -1,7 +1,6 @@
 package dev.mapnhud.client.map.cave;
 
 import dev.mapnhud.client.map.CaveFloodFill;
-import it.unimi.dsi.fastutil.longs.LongSets;
 import java.util.EnumSet;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.Level;
@@ -117,9 +116,9 @@ public final class CaveFloodController {
    * @return information about what happened this tick
    */
   public TickResult tick(Level level, BlockPos playerPos, int floodRadiusBlocks,
-                         int tickCounter, int priQ, int scanQ, int refloodQ, int navQ) {
+                         int tickCounter, int priQ, int scanQ, int refloodQ) {
     boolean started = maybeStartFlood(level, playerPos, floodRadiusBlocks,
-        tickCounter, priQ, scanQ, refloodQ, navQ);
+        tickCounter, priQ, scanQ, refloodQ);
 
     if (!caveFlood.isActive()) return TickResult.IDLE;
 
@@ -150,7 +149,7 @@ public final class CaveFloodController {
   // -- Internal --
 
   private boolean maybeStartFlood(Level level, BlockPos playerPos, int floodRadiusBlocks,
-                                  int tickCounter, int priQ, int scanQ, int refloodQ, int navQ) {
+                                  int tickCounter, int priQ, int scanQ, int refloodQ) {
     if (!caveFlood.isComplete()) return false;
 
     int px = playerPos.getX();
@@ -183,10 +182,9 @@ public final class CaveFloodController {
 
     String reason = formatReason(firstFlood);
     diagnostics.recordFloodStart(reason, px, py, pz, floodRadiusBlocks,
-        -1, 0, 0,
-        priQ, scanQ, refloodQ, navQ);
+        priQ, scanQ, refloodQ);
 
-    caveFlood.start(level, playerPos, floodRadiusBlocks, null, LongSets.emptySet());
+    caveFlood.start(level, playerPos, floodRadiusBlocks);
     lastFloodX = px;
     lastFloodY = py;
     lastFloodZ = pz;

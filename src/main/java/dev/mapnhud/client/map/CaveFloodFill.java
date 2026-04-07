@@ -5,8 +5,6 @@ import it.unimi.dsi.fastutil.longs.Long2IntMap;
 import it.unimi.dsi.fastutil.longs.Long2IntMaps;
 import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
-import it.unimi.dsi.fastutil.longs.LongSet;
-import it.unimi.dsi.fastutil.longs.LongSets;
 import java.util.Arrays;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.ChunkPos;
@@ -43,7 +41,6 @@ public final class CaveFloodFill {
    * cleared while this Result is held (new floods allocate fresh maps).
    *
    * @param reachable packed (x, z) -> walking Y for each reachable column
-   * @param unknownChunkFrontier neighboring chunks not loaded during graph prune
    * @param columnsVisited total 3D states the BFS examined so far
    * @param columnsReachable unique reachable columns in the collapsed field
    * @param complete true when the flood finished for this origin
@@ -54,7 +51,6 @@ public final class CaveFloodFill {
    */
   public record Result(
       Long2IntMap reachable,
-      LongSet unknownChunkFrontier,
       int columnsVisited,
       int columnsReachable,
       boolean complete,
@@ -69,10 +65,6 @@ public final class CaveFloodFill {
 
     public int getWalkingY(int blockX, int blockZ) {
       return reachable.get(ChunkPos.asLong(blockX, blockZ));
-    }
-
-    public boolean isUnknownChunk(int chunkX, int chunkZ) {
-      return unknownChunkFrontier.contains(ChunkPos.asLong(chunkX, chunkZ));
     }
 
     public boolean isOutsideRadius(int blockX, int blockZ) {
@@ -90,7 +82,7 @@ public final class CaveFloodFill {
   /** Empty result for when no flood has run. */
   public static final Result EMPTY = new Result(
       Long2IntMaps.unmodifiable(new Long2IntOpenHashMap()),
-      LongSets.emptySet(), 0, 0, true, 0, 0, -1, 0);
+      0, 0, true, 0, 0, -1, 0);
 
   // -- BFS queue (arrays reused across starts, grown on demand) --
 
@@ -101,13 +93,11 @@ public final class CaveFloodFill {
 
   private Long2IntOpenHashMap reachable;
   private LongOpenHashSet visitedPoses;
-  private LongSet unknownChunkFrontier;
 
   // -- Flood parameters --
 
   private int originX, originY, originZ;
   private int maxRadiusSq;
-  private LongSet allowedChunks;
   private int minBuildHeight, maxBuildHeight;
 
   // -- Status --
@@ -133,15 +123,11 @@ public final class CaveFloodFill {
    * collections so any previously returned {@link Result} objects stay
    * valid with their data intact.
    */
-  public void start(Level level, BlockPos origin, int maxRadius,
-      LongSet allowedChunks, LongSet unknownChunkFrontier) {
+  public void start(Level level, BlockPos origin, int maxRadius) {
     this.originX = origin.getX();
     this.originY = origin.getY();
     this.originZ = origin.getZ();
     this.maxRadiusSq = maxRadius * maxRadius;
-    this.allowedChunks = allowedChunks;
-    this.unknownChunkFrontier = unknownChunkFrontier != null
-        ? unknownChunkFrontier : LongSets.emptySet();
     this.minBuildHeight = level.getMinBuildHeight();
     this.maxBuildHeight = level.getMaxBuildHeight() - 1;
 
@@ -156,13 +142,6 @@ public final class CaveFloodFill {
     totalElapsedNanos = 0;
     complete = false;
     active = true;
-
-    // Reject if origin chunk is outside the allowed set
-    long originChunk = ChunkPos.asLong(originX >> 4, originZ >> 4);
-    if (allowedChunks != null && !allowedChunks.contains(originChunk)) {
-      complete = true;
-      return;
-    }
 
     // Seed BFS from origin
     int startY = findWalkableY(level, originX, originZ, originY);
@@ -216,11 +195,6 @@ public final class CaveFloodFill {
         int ndz = nz - originZ;
         if (ndx * ndx + ndz * ndz > maxRadiusSq) continue;
 
-        if (allowedChunks != null
-            && !allowedChunks.contains(ChunkPos.asLong(nx >> 4, nz >> 4))) {
-          continue;
-        }
-
         int walkY = findWalkableY(level, nx, nz, y);
         if (walkY == Integer.MIN_VALUE) continue;
 
@@ -249,7 +223,7 @@ public final class CaveFloodFill {
   /** Returns the current result snapshot. */
   public Result currentResult() {
     if (!active) return EMPTY;
-    return new Result(reachable, unknownChunkFrontier,
+    return new Result(reachable,
         statesVisited, reachable.size(), complete,
         originX, originZ, maxRadiusSq, totalElapsedNanos);
   }
@@ -310,7 +284,14 @@ public final class CaveFloodFill {
 
   // -- Key packing --
 
-  /** Packs signed X/Z (26-bit each) and Y (12-bit) into a long key. */
+  /**
+   * Packs an (x, y, z) pose into a 64-bit hash key for the visited set.
+   *
+   * <p>Hash key only — never decoded back. Y is masked to 12 bits, which
+   * means negative Ys collide with their positive counterparts modulo 4096.
+   * 1.21's vertical range is -64..320, so the 12-bit window covers it
+   * without true cross-Y collisions, but the bits are NOT a recoverable Y.
+   */
   private static long packXYZ(int x, int y, int z) {
     long px = x & 0x3FFFFFFL;
     long pz = z & 0x3FFFFFFL;

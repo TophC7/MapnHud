@@ -44,7 +44,6 @@ public final class CaveCacheDiagnostics {
     MODE_SWITCH("mode-switch"),
     NEAR_NULL_SCAN("near-null-scan"),
     FLOOD_COOLDOWN_SKIP("flood-cooldown-skip"),
-    NAV_GRAPH_REBUILD("nav-graph-rebuild"),
     SCAN_DROP_MAX_RETRIES("scan-drop-max-retries"),
     NEAR_MISSING_OR_DEAD("near-missing-or-dead");
 
@@ -65,8 +64,6 @@ public final class CaveCacheDiagnostics {
   private int periodicPlayerScans;
   private int periodicAdjacentScans;
   private int immediateScans;
-  private int navProcessed;
-  private int navBuilt;
   private int cacheWrites;
   private int knownFullScans;
   private int knownPartialScans;
@@ -104,8 +101,6 @@ public final class CaveCacheDiagnostics {
     periodicPlayerScans = 0;
     periodicAdjacentScans = 0;
     immediateScans = 0;
-    navProcessed = 0;
-    navBuilt = 0;
     cacheWrites = 0;
     knownFullScans = 0;
     knownPartialScans = 0;
@@ -140,7 +135,7 @@ public final class CaveCacheDiagnostics {
   }
   public void recordEventDrop(int chunkX, int chunkZ, int attempts,
                               int priorityQueueSize, int scanQueueSize,
-                              int refloodQueueSize, int navQueueSize) {
+                              int refloodQueueSize) {
     eventDrops++;
     totalDroppedScans++;
     long key = ChunkPos.asLong(chunkX, chunkZ);
@@ -148,25 +143,24 @@ public final class CaveCacheDiagnostics {
       lastAnomaly = Anomaly.SCAN_DROP_MAX_RETRIES;
       if (ENABLED) {
         MapnHudMod.LOG.warn(
-            "[MapDiag] Dropped unresolved chunk after {} retries at ({}, {}) q[pri={},scan={},reflood={},nav={}]",
+            "[MapDiag] Dropped unresolved chunk after {} retries at ({}, {}) q[pri={},scan={},reflood={}]",
             attempts, chunkX, chunkZ,
-            priorityQueueSize, scanQueueSize, refloodQueueSize, navQueueSize);
+            priorityQueueSize, scanQueueSize, refloodQueueSize);
       }
     }
   }
 
   public void recordFloodStart(String reason, int originX, int originY, int originZ,
-                               int radiusBlocks, int allowedChunks, int unknownFrontier,
-                               int graphSnapshots, int priQ, int scanQ, int refloodQ, int navQ) {
+                               int radiusBlocks,
+                               int priQ, int scanQ, int refloodQ) {
     floodStarts++;
     totalFloodStarts++;
     lastFloodReason = reason;
     if (ENABLED) {
       MapnHudMod.LOG.info(
-          "[MapDiag] Flood start reason={} origin=({}, {}, {}) radius={} allowedChunks={} unknownFrontier={} graphSnapshots={} q[pri={},scan={},reflood={},nav={}]",
+          "[MapDiag] Flood start reason={} origin=({}, {}, {}) radius={} q[pri={},scan={},reflood={}]",
           reason, originX, originY, originZ, radiusBlocks,
-          allowedChunks, unknownFrontier, graphSnapshots,
-          priQ, scanQ, refloodQ, navQ);
+          priQ, scanQ, refloodQ);
     }
   }
   public void recordFloodCompletion() {
@@ -178,9 +172,6 @@ public final class CaveCacheDiagnostics {
     totalFloodCooldownSkips++;
     lastAnomaly = Anomaly.FLOOD_COOLDOWN_SKIP;
   }
-
-  public void recordNavProcessed() { navProcessed++; }
-  public void recordNavBuilt() { navBuilt++; }
 
   public void noteAnomaly(Anomaly anomaly) {
     lastAnomaly = anomaly;
@@ -194,18 +185,14 @@ public final class CaveCacheDiagnostics {
     }
   }
 
-  public void noteNavGraphRebuild(int chunkX, int chunkZ) {
-    lastAnomaly = Anomaly.NAV_GRAPH_REBUILD;
-    if (ENABLED) {
-      MapnHudMod.LOG.info(
-          "[MapDiag] Nav graph update inside active flood at ({}, {}), scheduling flood rebuild",
-          chunkX, chunkZ);
-    }
-  }
-
   /**
    * Classifies a scan result into per-tick counters and emits a warning
    * the first time a near-player chunk produces a null cave scan.
+   *
+   * <p>The expensive field-flag classification (the inner per-column loop)
+   * is gated behind {@link #ENABLED} because it's only consumed by the
+   * periodic log line, which is itself gated. The simple per-source counters
+   * stay unconditional because they're cheap and provide HUD-visible totals.
    */
   public void classifyScanResult(ChunkAccess chunk, ChunkColorData data, ScanSource source,
                                  boolean caveMode, boolean isNearPlayer,
@@ -231,10 +218,9 @@ public final class CaveCacheDiagnostics {
           lastAnomaly = Anomaly.NEAR_NULL_SCAN;
           if (ENABLED) {
             MapnHudMod.LOG.warn(
-                "[MapDiag] Null cave scan near player at chunk ({}, {}) floodComplete={} floodUnknown={} reachableCols={}",
+                "[MapDiag] Null cave scan near player at chunk ({}, {}) floodComplete={} reachableCols={}",
                 chunk.getPos().x, chunk.getPos().z,
                 floodResult.complete(),
-                floodResult.isUnknownChunk(chunk.getPos().x, chunk.getPos().z),
                 floodResult.columnsReachable());
           }
         }
@@ -244,8 +230,9 @@ public final class CaveCacheDiagnostics {
 
     warnedNullNearChunks.remove(ChunkPos.asLong(chunk.getPos().x, chunk.getPos().z));
 
-    if (!data.isCaveData()) return;
+    if (!ENABLED || !data.isCaveData()) return;
 
+    // Diagnostics-only classification below: only the periodic log reads these.
     int known = data.knownCount();
     if (known == ChunkColorData.PIXELS) {
       knownFullScans++;
@@ -256,8 +243,14 @@ public final class CaveCacheDiagnostics {
       return;
     }
 
-    int unknown = data.countFieldFlag(CaveFieldState.UNKNOWN);
-    int boundary = data.countFieldFlag(CaveFieldState.BOUNDARY);
+    // Single pass over field states instead of two countFieldFlag walks.
+    int unknown = 0;
+    int boundary = 0;
+    for (int i = 0; i < ChunkColorData.PIXELS; i++) {
+      byte state = data.fieldStateAtIndex(i);
+      if (CaveFieldState.has(state, CaveFieldState.UNKNOWN)) unknown++;
+      if (CaveFieldState.has(state, CaveFieldState.BOUNDARY)) boundary++;
+    }
     if (unknown == ChunkColorData.PIXELS) {
       unknownOnlyScans++;
     } else if (boundary == ChunkColorData.PIXELS) {
@@ -283,17 +276,17 @@ public final class CaveCacheDiagnostics {
         tick, ctx.caveMode(),
         ctx.playerChunkX(), ctx.playerChunkZ(),
         ctx.priorityQueueSize(), ctx.scanQueueSize(),
-        ctx.refloodQueueSize(), ctx.navQueueSize(),
-        ctx.scanQueuedSize(), ctx.navQueuedSize(),
+        ctx.refloodQueueSize(),
+        ctx.scanQueuedSize(),
         ctx.nextPriorityEligibleTick(), ctx.nextScanEligibleTick(),
         ctx.floodActive(), ctx.floodComplete(),
         ctx.floodColumnsReachable(), ctx.floodStatesVisited(),
-        ctx.floodUnknownChunkFrontier(), ctx.floodElapsedMs(),
+        ctx.floodElapsedMs(),
         lastFloodReason,
         eventScans, eventRequeues, eventDrops, eventNullScans,
         refloodScans, refloodNullScans,
         periodicPlayerScans, periodicAdjacentScans, immediateScans,
-        navProcessed, navBuilt, cacheWrites,
+        cacheWrites,
         knownFullScans, knownPartialScans,
         unknownOnlyScans, boundaryOnlyScans, mixedZeroKnownScans,
         near.loadedChunks(), near.cachedChunks(),
@@ -313,22 +306,22 @@ public final class CaveCacheDiagnostics {
     if (!ENABLED || !ctx.caveMode()) return;
     if (tickCounter % LOG_INTERVAL_TICKS != 0) return;
     MapnHudMod.LOG.info(
-        "[MapDiag] tick={} playerChunk=({}, {}) flood[active={},complete={},cols={},states={},unknownChunks={},elapsedMs={}] " +
-            "queues[pri={},scan={},reflood={},nav={},scanSet={},navSet={},nextPri={},nextScan={}] " +
-            "work[event={} requeue={} drop={} null={} reflood={} refloodNull={} periodicP={} periodicAdj={} immediate={} nav={} navBuilt={} writes={} " +
+        "[MapDiag] tick={} playerChunk=({}, {}) flood[active={},complete={},cols={},states={},elapsedMs={}] " +
+            "queues[pri={},scan={},reflood={},scanSet={},nextPri={},nextScan={}] " +
+            "work[event={} requeue={} drop={} null={} reflood={} refloodNull={} periodicP={} periodicAdj={} immediate={} writes={} " +
             "knownFull={} knownPartial={} unknownOnly={} boundaryOnly={} mixed0Known={}] " +
             "near[loaded={} cached={} missing={} suspectDead={}] totals[requeue={} drop={} null={} floodStart={} floodDone={} cooldownSkip={}] anomaly={}",
         s.tick(), s.playerChunkX(), s.playerChunkZ(),
         s.floodActive(), s.floodComplete(), s.floodColumnsReachable(),
-        s.floodStatesVisited(), s.floodUnknownChunkFrontier(),
+        s.floodStatesVisited(),
         String.format("%.2f", s.floodElapsedMs()),
-        s.priorityQueueSize(), s.scanQueueSize(), s.refloodQueueSize(), s.navQueueSize(),
-        s.scanQueuedSize(), s.navQueuedSize(),
+        s.priorityQueueSize(), s.scanQueueSize(), s.refloodQueueSize(),
+        s.scanQueuedSize(),
         s.nextPriorityEligibleTick(), s.nextScanEligibleTick(),
         s.tickEventScans(), s.tickEventRequeues(), s.tickEventDrops(), s.tickEventNullScans(),
         s.tickRefloodScans(), s.tickRefloodNullScans(),
         s.tickPeriodicPlayerScans(), s.tickPeriodicAdjacentScans(), s.tickImmediateScans(),
-        s.tickNavProcessed(), s.tickNavBuilt(), s.tickCacheWrites(),
+        s.tickCacheWrites(),
         s.tickKnownFullScans(), s.tickKnownPartialScans(),
         s.tickUnknownOnlyScans(), s.tickBoundaryOnlyScans(), s.tickMixedZeroKnownScans(),
         s.nearLoadedChunks(), s.nearCachedChunks(), s.nearMissingChunks(), s.nearSuspectDeadChunks(),
@@ -370,7 +363,7 @@ public final class CaveCacheDiagnostics {
           cached++;
         }
 
-        if (!caveMode || !flood.complete() || flood.isUnknownChunk(nx, nz)) continue;
+        if (!caveMode || !flood.complete()) continue;
         int centerX = (nx << 4) + 8;
         int centerZ = (nz << 4) + 8;
         if (flood.isOutsideRadius(centerX, centerZ)) continue;
@@ -403,7 +396,7 @@ public final class CaveCacheDiagnostics {
           continue;
         }
 
-        if (!caveMode || !flood.complete() || flood.isUnknownChunk(nx, nz)) continue;
+        if (!caveMode || !flood.complete()) continue;
         int centerX = (nx << 4) + 8;
         int centerZ = (nz << 4) + 8;
         if (!flood.isOutsideRadius(centerX, centerZ) && data.knownCount() == 0) {
@@ -441,9 +434,7 @@ public final class CaveCacheDiagnostics {
       int priorityQueueSize,
       int scanQueueSize,
       int refloodQueueSize,
-      int navQueueSize,
       int scanQueuedSize,
-      int navQueuedSize,
       int nextPriorityEligibleTick,
       int nextScanEligibleTick,
       boolean floodActive,
@@ -453,7 +444,6 @@ public final class CaveCacheDiagnostics {
   ) {
     public int floodColumnsReachable() { return floodResult.columnsReachable(); }
     public int floodStatesVisited() { return floodResult.columnsVisited(); }
-    public int floodUnknownChunkFrontier() { return floodResult.unknownChunkFrontier().size(); }
     public double floodElapsedMs() { return floodResult.elapsedMs(); }
   }
 
@@ -475,16 +465,13 @@ public final class CaveCacheDiagnostics {
       int priorityQueueSize,
       int scanQueueSize,
       int refloodQueueSize,
-      int navQueueSize,
       int scanQueuedSize,
-      int navQueuedSize,
       int nextPriorityEligibleTick,
       int nextScanEligibleTick,
       boolean floodActive,
       boolean floodComplete,
       int floodColumnsReachable,
       int floodStatesVisited,
-      int floodUnknownChunkFrontier,
       double floodElapsedMs,
       String lastFloodReason,
       int tickEventScans,
@@ -496,8 +483,6 @@ public final class CaveCacheDiagnostics {
       int tickPeriodicPlayerScans,
       int tickPeriodicAdjacentScans,
       int tickImmediateScans,
-      int tickNavProcessed,
-      int tickNavBuilt,
       int tickCacheWrites,
       int tickKnownFullScans,
       int tickKnownPartialScans,
@@ -519,14 +504,14 @@ public final class CaveCacheDiagnostics {
     public static DebugSnapshot empty() {
       return new DebugSnapshot(
           0, false, 0, 0,
-          0, 0, 0, 0,
-          0, 0,
+          0, 0, 0,
+          0,
           Integer.MAX_VALUE, Integer.MAX_VALUE,
-          false, true, 0, 0, 0, 0.0,
+          false, true, 0, 0, 0.0,
           "init",
           0, 0, 0, 0,
           0, 0, 0, 0, 0,
-          0, 0, 0,
+          0,
           0, 0, 0, 0, 0,
           0, 0, 0, 0,
           0, 0, 0, 0, 0, 0,

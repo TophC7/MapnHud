@@ -17,7 +17,11 @@ import net.neoforged.neoforge.event.level.LevelEvent;
 public final class ChunkCacheEventHandler {
 
   private static final ChunkColorCache CACHE = new ChunkColorCache();
-  private static boolean cacheUpdatedThisTick = false;
+
+  // Tick thread (game) writes; render thread reads via consumeDirty().
+  // In 1.21.1 these are the same thread, but volatile keeps the contract
+  // explicit and survives any future thread split.
+  private static volatile boolean cacheUpdatedThisTick = false;
 
   public static ChunkColorCache getCache() {
     return CACHE;

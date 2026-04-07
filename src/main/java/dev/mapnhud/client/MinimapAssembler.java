@@ -116,7 +116,7 @@ public class MinimapAssembler {
         int i = px * mapSize + pz;
 
         if (caveMode && !flood.isOutsideRadius(wx, wz) && !flood.isReachable(wx, wz)) {
-          vFieldStates[i] = currentFloodFieldState(flood, wx, wz, cx, cz);
+          vFieldStates[i] = currentFloodFieldState(flood, wx, wz);
           vKnown[i] = false;
           vHasData[i] = true;
           continue;
@@ -148,10 +148,8 @@ public class MinimapAssembler {
   }
 
   private static byte currentFloodFieldState(
-      CaveFloodFill.Result flood, int wx, int wz, int cx, int cz) {
-    if (!flood.complete()
-        || flood.isUnknownChunk(cx, cz)
-        || flood.isOutsideRadius(wx, wz)) {
+      CaveFloodFill.Result flood, int wx, int wz) {
+    if (!flood.complete() || flood.isOutsideRadius(wx, wz)) {
       return CaveFieldState.UNKNOWN;
     }
     return CaveFieldState.BOUNDARY;

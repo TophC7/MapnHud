@@ -84,49 +84,57 @@ public final class ChunkScanQueueSet {
     return true;
   }
 
-  /** Removes the chunk from all dedup sets when it unloads. */
+  /**
+   * Removes every queued reference to the chunk when it unloads, both from
+   * the dedup sets and from the deques themselves. Without the deque sweep
+   * the orphaned QueuedChunk would retain its (now stale) ChunkAccess until
+   * polled, and a fresh load of the same coordinate would be enqueued a
+   * second time because the dedup mark is gone.
+   */
   public void onChunkUnload(int chunkX, int chunkZ) {
     long key = ChunkPos.asLong(chunkX, chunkZ);
     scanQueued.remove(key);
+    priorityScanQueue.removeIf(q -> chunkKeyOf(q) == key);
+    scanQueue.removeIf(q -> chunkKeyOf(q) == key);
     refloodQueue.removeIf(q -> q.chunkKey() == key);
     refloodQueued.removeIf(refloodKey -> refloodKey.chunkKey() == key);
+  }
+
+  private static long chunkKeyOf(QueuedChunk q) {
+    return ChunkPos.asLong(q.chunk().getPos().x, q.chunk().getPos().z);
   }
 
   // -- Poll --
 
   /** Polls the next eligible scan chunk; priority queue first. */
   public QueuedChunk pollNextScanChunk(int tickCounter) {
-    if (priorityScanQueue.isEmpty() && scanQueue.isEmpty()) return null;
-
     QueuedChunk q = pollEligible(priorityScanQueue, tickCounter, true);
     if (q != null) return q;
     return pollEligible(scanQueue, tickCounter, false);
   }
 
+  /**
+   * Polls the front of the deque if it's eligible. The deque is kept sorted
+   * by ascending eligibleTick by construction: fresh enqueues use {@code
+   * tickCounter} (monotonically non-decreasing), and requeues use {@code
+   * tickCounter + delay} which is always &gt;= the eligibleTick of any
+   * existing entry. So the smallest eligibleTick is always at the front.
+   */
   private QueuedChunk pollEligible(ArrayDeque<QueuedChunk> queue, int tickCounter, boolean priority) {
-    if (queue.isEmpty()) return null;
-    if (priority && tickCounter < nextPriorityEligibleTick) return null;
-    if (!priority && tickCounter < nextScanEligibleTick) return null;
-
-    int size = queue.size();
-    int newMinEligible = Integer.MAX_VALUE;
-    QueuedChunk found = null;
-    for (int i = 0; i < size; i++) {
-      QueuedChunk queued = queue.pollFirst();
-      if (queued == null) break;
-      if (found == null && queued.eligibleTick() <= tickCounter) {
-        found = queued;
-        continue;
-      }
-      if (queued.eligibleTick() < newMinEligible) newMinEligible = queued.eligibleTick();
-      queue.addLast(queued);
+    QueuedChunk head = queue.peekFirst();
+    if (head == null) return null;
+    if (head.eligibleTick() > tickCounter) {
+      // Cache the next-eligible tick so the next poll can short-circuit.
+      if (priority) nextPriorityEligibleTick = head.eligibleTick();
+      else nextScanEligibleTick = head.eligibleTick();
+      return null;
     }
-    if (priority) {
-      nextPriorityEligibleTick = newMinEligible;
-    } else {
-      nextScanEligibleTick = newMinEligible;
-    }
-    return found;
+    queue.pollFirst();
+    QueuedChunk newHead = queue.peekFirst();
+    int nextTick = newHead == null ? Integer.MAX_VALUE : newHead.eligibleTick();
+    if (priority) nextPriorityEligibleTick = nextTick;
+    else nextScanEligibleTick = nextTick;
+    return head;
   }
 
   /** Marks a chunk's scan slot as resolved (removes from dedup). */
@@ -159,26 +167,22 @@ public final class ChunkScanQueueSet {
     return RequeueOutcome.REQUEUED;
   }
 
+  /**
+   * Polls the front of the reflood deque if it's eligible. Same FIFO-by-
+   * construction invariant as {@link #pollEligible}.
+   */
   public QueuedRefloodChunk pollNextReflood(int tickCounter) {
-    if (refloodQueue.isEmpty()) return null;
-    if (tickCounter < nextRefloodEligibleTick) return null;
-
-    int size = refloodQueue.size();
-    int newMinEligible = Integer.MAX_VALUE;
-    QueuedRefloodChunk found = null;
-    for (int i = 0; i < size; i++) {
-      QueuedRefloodChunk queued = refloodQueue.pollFirst();
-      if (queued == null) break;
-      if (found == null && queued.eligibleTick() <= tickCounter) {
-        found = queued;
-        refloodQueued.remove(new RefloodKey(queued.chunkKey(), queued.layerY()));
-        continue;
-      }
-      if (queued.eligibleTick() < newMinEligible) newMinEligible = queued.eligibleTick();
-      refloodQueue.addLast(queued);
+    QueuedRefloodChunk head = refloodQueue.peekFirst();
+    if (head == null) return null;
+    if (head.eligibleTick() > tickCounter) {
+      nextRefloodEligibleTick = head.eligibleTick();
+      return null;
     }
-    nextRefloodEligibleTick = newMinEligible;
-    return found;
+    refloodQueue.pollFirst();
+    refloodQueued.remove(new RefloodKey(head.chunkKey(), head.layerY()));
+    QueuedRefloodChunk newHead = refloodQueue.peekFirst();
+    nextRefloodEligibleTick = newHead == null ? Integer.MAX_VALUE : newHead.eligibleTick();
+    return head;
   }
 
   public boolean refloodIsEmpty() {
@@ -212,8 +216,6 @@ public final class ChunkScanQueueSet {
   public int scanQueueSize() { return scanQueue.size(); }
   public int refloodQueueSize() { return refloodQueue.size(); }
   public int scanQueuedSize() { return scanQueued.size(); }
-  public int navQueueSize() { return 0; }
-  public int navQueuedSize() { return 0; }
 
   public int nextPriorityEligibleTick() { return nextPriorityEligibleTick; }
   public int nextScanEligibleTick() { return nextScanEligibleTick; }

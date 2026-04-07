@@ -27,3 +27,4 @@ dist/
 run/
 .claude/
 .history/
+.vscode/launch.json

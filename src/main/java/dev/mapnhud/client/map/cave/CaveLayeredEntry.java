@@ -121,6 +121,11 @@ public final class CaveLayeredEntry {
    * Stores data at the given bucket. Replaces any existing layer at that
    * bucket. Only bumps the version when the stored reference changes, so
    * identity re-puts don't invalidate the composite cache.
+   *
+   * <p>When at capacity and inserting a new bucket, evicts the cave layer
+   * farthest from the incoming Y. This guarantees {@code put} never silently
+   * drops data, which matters at load time when persisted layers may exceed
+   * the runtime cap.
    */
   public void put(int bucketY, ChunkColorData data) {
     for (int i = 0; i < count; i++) {
@@ -133,12 +138,17 @@ public final class CaveLayeredEntry {
       }
     }
 
-    if (count < layers.length) {
-      layerYs[count] = bucketY;
-      layers[count] = data;
-      count++;
-      chunkVersion++;
+    if (count >= layers.length) {
+      // Surface layer always survives. Evict the cave layer farthest from
+      // the incoming bucket so the entry stays clustered around recent work.
+      int reference = bucketY == SURFACE_LAYER ? 0 : bucketY;
+      evictFarthestCave(reference);
     }
+
+    layerYs[count] = bucketY;
+    layers[count] = data;
+    count++;
+    chunkVersion++;
   }
 
   /** Returns the number of cave layers (excluding the surface layer). */
@@ -150,29 +160,33 @@ public final class CaveLayeredEntry {
     return n;
   }
 
-  public void evictFarthestCave(int playerY) {
+  /**
+   * Evicts the cave layer (never the surface layer) farthest from the given
+   * reference Y. No-op if there are no cave layers. Layer order is irrelevant
+   * because lookup is linear, so eviction uses swap-with-last.
+   */
+  public void evictFarthestCave(int referenceY) {
     int farthestIdx = -1;
     int maxDist = -1;
 
     for (int i = 0; i < count; i++) {
       if (layerYs[i] == SURFACE_LAYER) continue;
-      int dist = Math.abs(layerYs[i] - playerY);
+      int dist = Math.abs(layerYs[i] - referenceY);
       if (dist > maxDist) {
         maxDist = dist;
         farthestIdx = i;
       }
     }
 
-    if (farthestIdx != -1) {
-      chunkVersion++;
-      for (int i = farthestIdx; i < count - 1; i++) {
-        layerYs[i] = layerYs[i + 1];
-        layers[i] = layers[i + 1];
-      }
-      count--;
-      layerYs[count] = Integer.MIN_VALUE;
-      layers[count] = null;
-    }
+    if (farthestIdx == -1) return;
+
+    chunkVersion++;
+    int last = count - 1;
+    layers[farthestIdx] = layers[last];
+    layerYs[farthestIdx] = layerYs[last];
+    layers[last] = null;
+    layerYs[last] = Integer.MIN_VALUE;
+    count = last;
   }
 
   /** Iterates each present (layerY, data) pair. Used by persistence. */

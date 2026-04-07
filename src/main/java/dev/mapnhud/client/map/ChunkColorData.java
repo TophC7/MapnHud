@@ -14,22 +14,25 @@ import java.util.Arrays;
  * exploration history survives across sessions. Cave field flags are
  * runtime-only and recalculated from live flood data on rescans.
  *
- * <p>No shading is applied here. Colors are base ARGB values straight from
- * the block color pipeline. Shading happens later in the viewport assembler
- * where the full visible heightfield is available, eliminating chunk boundary
- * seams by design.
+ * <p>Indexed as {@code [localX * 16 + localZ]}. X is the outer axis to match
+ * the north-to-south (Z) scanning order used by the assembler's elevation
+ * shading.
  *
- * <p>Indexed as {@code [localX * 16 + localZ]}. X is the outer axis to
- * match the north-to-south (Z) scanning order used by the assembler's
- * elevation shading.
+ * <p>Surface vs cave data is distinguished by whether {@link #fieldStates} is
+ * present. Surface data has no field-state machinery; cave data always has a
+ * field-states array even when every column is known.
  */
 public final class ChunkColorData {
 
   public static final int SIZE = 16;
   public static final int PIXELS = SIZE * SIZE;
 
-  /** Shared immutable array for surface scans where all columns are known. */
-  private static final boolean[] ALL_KNOWN = allTrue();
+  /**
+   * Shared known mask for surface scans where every column is known terrain.
+   * Treat as immutable. Returned by {@link #knownArrayForCodec()} only because
+   * the codec performs a read-only pack of the bits.
+   */
+  private static final boolean[] ALL_KNOWN = filledTrue();
 
   private final int[] baseColors;   // ARGB, unshaded
   private final int[] heights;      // rendered block Y (after skip-block resolution)
@@ -37,70 +40,87 @@ public final class ChunkColorData {
   private final int[] waterTints;   // biome water ARGB (0 when dry)
   private final boolean[] isLeaf;   // true when rendered block is LeavesBlock
   private final boolean[] known;    // true = real terrain data, false = unexplored
-  private final byte[] fieldStates; // cave field flags (unknown/reachable/boundary/visible)
-  private final boolean cave;       // true = cave-mode scan produced this data
+  private final byte[] fieldStates; // null = surface data; non-null = cave data
   private final int knownCount;     // cached count of known columns
 
-  /** Surface constructor: all columns are known terrain. */
-  public ChunkColorData(
-      int[] baseColors, int[] heights, int[] waterDepths,
-      int[] waterTints, boolean[] isLeaf) {
-    this(baseColors, heights, waterDepths, waterTints, isLeaf, ALL_KNOWN, false, null, PIXELS);
-  }
-
-  /** Cave constructor with per-column known mask. */
-  public ChunkColorData(
-      int[] baseColors, int[] heights, int[] waterDepths,
-      int[] waterTints, boolean[] isLeaf, boolean[] known) {
-    this(baseColors, heights, waterDepths, waterTints, isLeaf, known, true,
-        defaultCaveFieldStates(known), countTrue(known));
-  }
-
-  /** Cave constructor with explicit per-column field states. */
-  public ChunkColorData(
-      int[] baseColors, int[] heights, int[] waterDepths,
-      int[] waterTints, boolean[] isLeaf, boolean[] known, byte[] fieldStates) {
-    this(baseColors, heights, waterDepths, waterTints, isLeaf, known, true, fieldStates, countTrue(known));
-  }
-
-  /**
-   * Most-explicit constructor. Used by merge paths that already know
-   * {@code knownCount} so the constructor can skip the second pass over
-   * the known mask.
-   */
-  ChunkColorData(
-      int[] baseColors, int[] heights, int[] waterDepths,
-      int[] waterTints, boolean[] isLeaf, boolean[] known, boolean cave,
-      byte[] fieldStates, int knownCount) {
+  /** One canonical constructor. All factories funnel through here. */
+  private ChunkColorData(
+      int[] baseColors, int[] heights, int[] waterDepths, int[] waterTints,
+      boolean[] isLeaf, boolean[] known, byte[] fieldStates, int knownCount) {
     this.baseColors = baseColors;
     this.heights = heights;
     this.waterDepths = waterDepths;
     this.waterTints = waterTints;
     this.isLeaf = isLeaf;
     this.known = known;
-    this.fieldStates = cave
-        ? (fieldStates != null ? fieldStates : defaultCaveFieldStates(known))
-        : null;
-    this.cave = cave;
+    this.fieldStates = fieldStates;
     this.knownCount = knownCount;
   }
 
-  /** Codec entry point: builds an instance from deserialized arrays. */
-  static ChunkColorData fromCodec(
+  // -- Factories --
+
+  /** Surface scan: every column is known terrain, no field-state machinery. */
+  public static ChunkColorData surface(
       int[] baseColors, int[] heights, int[] waterDepths,
-      int[] waterTints, boolean[] isLeaf, boolean[] known, boolean cave) {
-    return new ChunkColorData(baseColors, heights, waterDepths, waterTints, isLeaf, known, cave,
-        cave ? defaultCaveFieldStates(known) : null, countTrue(known));
+      int[] waterTints, boolean[] isLeaf) {
+    return new ChunkColorData(
+        baseColors, heights, waterDepths, waterTints, isLeaf,
+        ALL_KNOWN, null, PIXELS);
   }
 
-  // -- Codec accessors (package-private, for ChunkColorDataCodec) --
+  /**
+   * Cave scan with explicit per-column known mask and field states. The known
+   * count is computed from the mask.
+   */
+  public static ChunkColorData cave(
+      int[] baseColors, int[] heights, int[] waterDepths, int[] waterTints,
+      boolean[] isLeaf, boolean[] known, byte[] fieldStates) {
+    return new ChunkColorData(
+        baseColors, heights, waterDepths, waterTints, isLeaf,
+        known, fieldStates, countTrue(known));
+  }
 
-  int[] baseColors() { return baseColors; }
-  int[] heights() { return heights; }
-  int[] waterDepths() { return waterDepths; }
-  int[] waterTints() { return waterTints; }
-  boolean[] isLeafArray() { return isLeaf; }
-  boolean[] knownArray() { return known; }
+  /**
+   * Cave merge result. Caller already counted the new known columns during
+   * the merge loop, so we skip the second pass.
+   */
+  private static ChunkColorData caveWithKnownCount(
+      int[] baseColors, int[] heights, int[] waterDepths, int[] waterTints,
+      boolean[] isLeaf, boolean[] known, byte[] fieldStates, int knownCount) {
+    return new ChunkColorData(
+        baseColors, heights, waterDepths, waterTints, isLeaf,
+        known, fieldStates, knownCount);
+  }
+
+  /**
+   * Codec entry point for a surface chunk. The known array is freshly
+   * deserialized but in practice should be all-true; we keep it as-is.
+   */
+  static ChunkColorData fromCodecSurface(
+      int[] baseColors, int[] heights, int[] waterDepths,
+      int[] waterTints, boolean[] isLeaf, boolean[] known) {
+    return new ChunkColorData(
+        baseColors, heights, waterDepths, waterTints, isLeaf,
+        known, null, countTrue(known));
+  }
+
+  /** Codec entry point for a cave chunk. Field states default from the known mask. */
+  static ChunkColorData fromCodecCave(
+      int[] baseColors, int[] heights, int[] waterDepths,
+      int[] waterTints, boolean[] isLeaf, boolean[] known) {
+    return new ChunkColorData(
+        baseColors, heights, waterDepths, waterTints, isLeaf,
+        known, defaultCaveFieldStates(known), countTrue(known));
+  }
+
+  // -- Codec accessors. Read-only — callers must not mutate the returned arrays. --
+
+  int[] baseColorsForCodec() { return baseColors; }
+  int[] heightsForCodec() { return heights; }
+  int[] waterDepthsForCodec() { return waterDepths; }
+  int[] waterTintsForCodec() { return waterTints; }
+  boolean[] isLeafArrayForCodec() { return isLeaf; }
+  boolean[] knownArrayForCodec() { return known; }
 
   // -- Public accessors --
 
@@ -131,11 +151,7 @@ public final class ChunkColorData {
 
   /** Returns cave field state flags for this column. */
   public byte getFieldState(int localX, int localZ) {
-    int idx = localX * SIZE + localZ;
-    if (!cave || fieldStates == null) {
-      return known[idx] ? CaveFieldState.REACHABLE : CaveFieldState.UNKNOWN;
-    }
-    return fieldStates[idx];
+    return fieldStateAt(localX * SIZE + localZ);
   }
 
   /** Returns true if this cave column is currently unknown/unconfirmed. */
@@ -143,24 +159,22 @@ public final class ChunkColorData {
     return CaveFieldState.has(getFieldState(localX, localZ), CaveFieldState.UNKNOWN);
   }
 
-  /** Counts columns where the given field-state flag is set. */
-  public int countFieldFlag(byte flag) {
-    int count = 0;
-    for (int i = 0; i < PIXELS; i++) {
-      if (CaveFieldState.has(fieldStateAt(i), flag)) count++;
-    }
-    return count;
+  /** Flat-index field state read. Public for diagnostics in a sibling package. */
+  public byte fieldStateAtIndex(int index) {
+    return fieldStateAt(index);
   }
 
   /** Returns true if this data was scanned in cave mode. */
   public boolean isCaveData() {
-    return cave;
+    return fieldStates != null;
   }
 
   /** Returns the cached count of columns with known terrain data. */
   public int knownCount() {
     return knownCount;
   }
+
+  // -- Merge operations --
 
   /**
    * Merges two cave-mode chunks additively. Known columns in the fresh scan
@@ -170,7 +184,6 @@ public final class ChunkColorData {
    * is not part of the current reachable cave slice.
    */
   public static ChunkColorData mergeCave(ChunkColorData old, ChunkColorData fresh) {
-    // Fast path: nothing to preserve from old.
     if (old.knownCount == 0) return fresh;
 
     int[] bc = new int[PIXELS];
@@ -183,33 +196,25 @@ public final class ChunkColorData {
     int newKnown = 0;
 
     for (int i = 0; i < PIXELS; i++) {
+      byte freshState = fresh.fieldStateAt(i);
       if (fresh.known[i]) {
-        bc[i] = fresh.baseColors[i];
-        ht[i] = fresh.heights[i];
-        wd[i] = fresh.waterDepths[i];
-        wt[i] = fresh.waterTints[i];
-        lf[i] = fresh.isLeaf[i];
+        copyColumn(fresh, i, bc, ht, wd, wt, lf, i);
         kn[i] = true;
-        st[i] = fresh.fieldStateAt(i);
+        st[i] = freshState;
         newKnown++;
-      } else if (CaveFieldState.has(fresh.fieldStateAt(i), CaveFieldState.BOUNDARY)) {
-        kn[i] = false;
-        st[i] = fresh.fieldStateAt(i);
+      } else if (CaveFieldState.has(freshState, CaveFieldState.BOUNDARY)) {
+        st[i] = freshState;
       } else if (old.known[i]) {
-        bc[i] = old.baseColors[i];
-        ht[i] = old.heights[i];
-        wd[i] = old.waterDepths[i];
-        wt[i] = old.waterTints[i];
-        lf[i] = old.isLeaf[i];
+        copyColumn(old, i, bc, ht, wd, wt, lf, i);
         kn[i] = true;
         st[i] = old.fieldStateAt(i);
         newKnown++;
       } else {
-        st[i] = mergeUnknownState(old.fieldStateAt(i), fresh.fieldStateAt(i));
+        st[i] = mergeUnknownState(old.fieldStateAt(i), freshState);
       }
     }
 
-    return new ChunkColorData(bc, ht, wd, wt, lf, kn, true, st, newKnown);
+    return caveWithKnownCount(bc, ht, wd, wt, lf, kn, st, newKnown);
   }
 
   /**
@@ -220,7 +225,6 @@ public final class ChunkColorData {
    * is never hidden behind black walls.
    */
   public static ChunkColorData fillGaps(ChunkColorData primary, ChunkColorData filler) {
-    // Fast path: primary already complete.
     if (primary.knownCount == PIXELS) return primary;
 
     boolean hasGaps = false;
@@ -243,20 +247,12 @@ public final class ChunkColorData {
 
     for (int i = 0; i < PIXELS; i++) {
       if (primary.known[i]) {
-        bc[i] = primary.baseColors[i];
-        ht[i] = primary.heights[i];
-        wd[i] = primary.waterDepths[i];
-        wt[i] = primary.waterTints[i];
-        lf[i] = primary.isLeaf[i];
+        copyColumn(primary, i, bc, ht, wd, wt, lf, i);
         kn[i] = true;
         st[i] = primary.fieldStateAt(i);
         newKnown++;
       } else if (filler.known[i] && canFillFrom(primary.fieldStateAt(i))) {
-        bc[i] = filler.baseColors[i];
-        ht[i] = filler.heights[i];
-        wd[i] = filler.waterDepths[i];
-        wt[i] = filler.waterTints[i];
-        lf[i] = filler.isLeaf[i];
+        copyColumn(filler, i, bc, ht, wd, wt, lf, i);
         kn[i] = true;
         st[i] = filler.fieldStateAt(i);
         newKnown++;
@@ -265,12 +261,23 @@ public final class ChunkColorData {
       }
     }
 
-    return new ChunkColorData(bc, ht, wd, wt, lf, kn, true, st, newKnown);
+    return caveWithKnownCount(bc, ht, wd, wt, lf, kn, st, newKnown);
   }
 
-  // -- Helpers --
+  // -- Internal helpers --
 
-  private static boolean[] allTrue() {
+  /** Copies one column from src into the merge output arrays. */
+  private static void copyColumn(
+      ChunkColorData src, int srcIdx,
+      int[] bc, int[] ht, int[] wd, int[] wt, boolean[] lf, int dstIdx) {
+    bc[dstIdx] = src.baseColors[srcIdx];
+    ht[dstIdx] = src.heights[srcIdx];
+    wd[dstIdx] = src.waterDepths[srcIdx];
+    wt[dstIdx] = src.waterTints[srcIdx];
+    lf[dstIdx] = src.isLeaf[srcIdx];
+  }
+
+  private static boolean[] filledTrue() {
     boolean[] arr = new boolean[PIXELS];
     Arrays.fill(arr, true);
     return arr;
@@ -291,7 +298,7 @@ public final class ChunkColorData {
   }
 
   private byte fieldStateAt(int index) {
-    if (!cave || fieldStates == null) {
+    if (fieldStates == null) {
       return known[index] ? CaveFieldState.REACHABLE : CaveFieldState.UNKNOWN;
     }
     return fieldStates[index];

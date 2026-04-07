@@ -10,8 +10,11 @@ import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -42,10 +45,17 @@ import net.minecraft.world.level.ChunkPos;
  * the deterministic bucket key from the cache layer system.
  *
  * <h3>Save durability</h3>
- * <p>Dirty chunks are snapshotted on the main thread. The IO thread writes
- * them asynchronously. Dirty entries are only cleared after the IO thread
- * confirms a successful write. On write failure, entries stay dirty for
- * retry on the next save cycle.
+ * <p>The main thread captures snapshots of {@link ChunkColorData} references
+ * (immutable, safe to share). The IO thread does all serialization,
+ * compression, and writing. Dirty chunks are removed from the dirty set at
+ * submit time and re-added on write failure, so modifications made between
+ * submit and ack are never coalesced into a stale snapshot.
+ *
+ * <h3>Region read cache</h3>
+ * <p>The IO thread keeps a per-region cache of compressed entries so each
+ * region file is read from disk at most once per session. Subsequent saves
+ * merge new entries into the in-memory map and rewrite the file without
+ * re-reading.
  */
 public final class ChunkCachePersistence {
 
@@ -58,17 +68,48 @@ public final class ChunkCachePersistence {
   /** Chunks per region axis (32x32 = 1024 chunks per region). */
   private static final int REGION_SHIFT = 5;
 
+  /** Maximum entries per region file (the count field is a u16). */
+  private static final int MAX_ENTRIES_PER_REGION = 0xFFFF;
+
   // Non-daemon thread: JVM waits for pending writes on shutdown.
   // Lazily created and recreated after shutdown (dimension changes).
   private ExecutorService ioExecutor;
 
+  // Chunks queued for the next save. Main-thread-only.
   private final LongOpenHashSet dirtyChunks = new LongOpenHashSet();
 
-  // Completed batch from the IO thread. Volatile for cross-thread visibility.
-  // Main thread reads and clears; IO thread sets on successful write.
-  private volatile LongOpenHashSet completedBatch = null;
+  // The batch currently being written by the IO thread, or null if idle.
+  // Main-thread-only field; the IO thread reads it indirectly via the lambda
+  // capture below.
+  private LongOpenHashSet inFlightBatch = null;
 
-  private Path dimensionDir;
+  // True while a write is queued/running on the IO thread. Volatile so the
+  // main thread sees the IO thread's clear without further synchronization.
+  // The single-threaded executor guarantees at most one in-flight write.
+  private volatile boolean writeInFlight = false;
+
+  // Set by the IO thread on a failed write. Volatile because the main thread
+  // reads it on the next save cycle to re-merge inFlightBatch into dirtyChunks.
+  // The volatile read of writeInFlight establishes happens-before for this field.
+  private volatile boolean lastWriteFailed = false;
+
+  // The active dimension. Replaced atomically by setDimension so any in-flight
+  // write keeps using the dimension it was submitted against, even after a
+  // dimension change. Each DimensionState carries its own regionCache, which
+  // means old-dimension cache entries can't pollute the new dimension's reads.
+  private volatile DimensionState dimension;
+
+  /**
+   * Per-dimension write state. Each instance is bound to one dimension's
+   * directory and its own region cache. Replaced atomically on dimension
+   * change so writes in flight keep using their original target.
+   */
+  private static final class DimensionState {
+    final Path dir;
+    final ConcurrentHashMap<Long, Map<Long, byte[]>> regionCache = new ConcurrentHashMap<>();
+
+    DimensionState(Path dir) { this.dir = dir; }
+  }
 
   /** Returns the IO executor, creating it if needed (after shutdown or first use). */
   private synchronized ExecutorService executor() {
@@ -82,16 +123,16 @@ public final class ChunkCachePersistence {
     return ioExecutor;
   }
 
-  /** Sets the current dimension's cache directory. */
+  /** Sets the current dimension's cache directory. Allocates a fresh region cache. */
   public void setDimension(ClientLevel level) {
     Path base = resolveCacheBase();
     if (base == null) {
-      dimensionDir = null;
+      dimension = null;
       return;
     }
     ResourceLocation dimId = level.dimension().location();
     String dimPath = dimId.getNamespace() + "/" + dimId.getPath();
-    dimensionDir = base.resolve(dimPath);
+    dimension = new DimensionState(base.resolve(dimPath));
   }
 
   /** Marks a chunk as dirty so all its layers will be written on the next save. */
@@ -99,126 +140,139 @@ public final class ChunkCachePersistence {
     dirtyChunks.add(ChunkPos.asLong(chunkX, chunkZ));
   }
 
+  // -- Save --
+
   /**
    * Snapshots dirty chunks and submits writes to the IO thread.
-   * Only clears dirty entries after the previous batch confirmed success.
+   *
+   * <p>Ownership model: chunks are removed from {@link #dirtyChunks} at submit
+   * time and parked in {@link #inFlightBatch}. On success, the in-flight batch
+   * is discarded. On failure, the next save cycle re-merges it back into
+   * dirty so the work isn't lost.
    */
   public void saveDirty(Long2ObjectOpenHashMap<CaveLayeredEntry> cache) {
-    if (dimensionDir == null) return;
-
-    // Acknowledge completed batch from previous IO cycle
-    acknowledgePreviousBatch();
-
+    DimensionState dim = dimension;
+    if (dim == null) return;
+    if (writeInFlight) return; // skip cycle; SAVE_INTERVAL >> typical write time
+    handleLastWriteResult();
     if (dirtyChunks.isEmpty()) return;
 
-    LongOpenHashSet batch = new LongOpenHashSet(dirtyChunks);
-    Map<Long, Map<Long, byte[]>> regionSnapshots = new HashMap<>();
+    submitWrite(dim, snapshot(cache, dirtyChunks));
+  }
 
-    for (long key : batch) {
-      CaveLayeredEntry entry = cache.get(key);
+  /** Snapshots all cached chunks and submits a full save. */
+  public void saveAll(Long2ObjectOpenHashMap<CaveLayeredEntry> cache) {
+    DimensionState dim = dimension;
+    if (dim == null || cache.isEmpty()) return;
+    if (writeInFlight) return;
+    handleLastWriteResult();
+
+    LongOpenHashSet allKeys = new LongOpenHashSet(dirtyChunks);
+    for (long key : cache.keySet()) allKeys.add(key);
+    if (allKeys.isEmpty()) return;
+
+    submitWrite(dim, snapshot(cache, allKeys));
+  }
+
+  /**
+   * Builds a write batch from the given key set, capturing immutable
+   * {@link ChunkColorData} references on the main thread. The actual
+   * serialization happens on the IO thread.
+   */
+  private PendingWrite snapshot(
+      Long2ObjectOpenHashMap<CaveLayeredEntry> cache, LongOpenHashSet keys) {
+    LongOpenHashSet batch = new LongOpenHashSet(keys);
+    Map<Long, List<LayerSnapshot>> regionLayers = new HashMap<>();
+
+    for (long chunkKey : batch) {
+      CaveLayeredEntry entry = cache.get(chunkKey);
       if (entry == null) continue;
-      snapshotEntry(key, entry, regionSnapshots);
+      int cx = ChunkPos.getX(chunkKey);
+      int cz = ChunkPos.getZ(chunkKey);
+      int rx = cx >> REGION_SHIFT;
+      int rz = cz >> REGION_SHIFT;
+      long regionKey = ChunkPos.asLong(rx, rz);
+      int localX = cx & 0x1F;
+      int localZ = cz & 0x1F;
+
+      List<LayerSnapshot> layers = regionLayers.computeIfAbsent(regionKey, k -> new ArrayList<>());
+      entry.forEachLayer((layerY, data) -> {
+        short fileLayerY = toFileLayerY(layerY);
+        long entryKey = packEntryKey(localX, localZ, fileLayerY);
+        layers.add(new LayerSnapshot(entryKey, data));
+      });
     }
 
-    if (regionSnapshots.isEmpty()) {
-      dirtyChunks.removeAll(batch);
-      return;
-    }
+    dirtyChunks.removeAll(batch);
+    return new PendingWrite(batch, regionLayers);
+  }
 
-    Path dir = dimensionDir;
+  private void submitWrite(DimensionState dim, PendingWrite pending) {
+    inFlightBatch = pending.batch();
+    Map<Long, List<LayerSnapshot>> regionLayers = pending.regionLayers();
+    writeInFlight = true;
     executor().submit(() -> {
-      boolean ok = writeRegions(dir, regionSnapshots);
-      if (ok) {
-        completedBatch = batch;
+      boolean ok;
+      try {
+        ok = regionLayers.isEmpty() || writeRegions(dim, regionLayers);
+      } catch (Throwable t) {
+        MapnHudMod.LOG.error("Unexpected error during map cache write", t);
+        ok = false;
       }
-      // On failure: batch stays in dirtyChunks for retry next cycle
+      lastWriteFailed = !ok;
+      writeInFlight = false; // happens-after lastWriteFailed, see field comment
     });
   }
 
   /**
-   * Snapshots all cached chunks and submits a full save. Dirty entries are
-   * only cleared after write success, matching saveDirty() durability.
+   * On the main thread, examines the result of the last completed write.
+   * On failure, re-merges the in-flight batch back into dirty.
    */
-  public void saveAll(Long2ObjectOpenHashMap<CaveLayeredEntry> cache) {
-    if (dimensionDir == null || cache.isEmpty()) return;
-
-    acknowledgePreviousBatch();
-
-    LongOpenHashSet batch = new LongOpenHashSet(dirtyChunks);
-    // Also include all cache keys (saveAll saves everything, not just dirty)
-    for (long key : cache.keySet()) {
-      batch.add(key);
+  private void handleLastWriteResult() {
+    if (inFlightBatch == null) return;
+    if (lastWriteFailed) {
+      dirtyChunks.addAll(inFlightBatch);
+      lastWriteFailed = false;
     }
-
-    Map<Long, Map<Long, byte[]>> regionSnapshots = new HashMap<>();
-    for (var entry : cache.long2ObjectEntrySet()) {
-      snapshotEntry(entry.getLongKey(), entry.getValue(), regionSnapshots);
-    }
-
-    Path dir = dimensionDir;
-    executor().submit(() -> {
-      boolean ok = writeRegions(dir, regionSnapshots);
-      if (ok) {
-        completedBatch = batch;
-      }
-    });
+    inFlightBatch = null;
   }
 
-  /** Clears dirty entries that the IO thread confirmed were written. */
-  private void acknowledgePreviousBatch() {
-    LongOpenHashSet completed = completedBatch;
-    if (completed != null) {
-      dirtyChunks.removeAll(completed);
-      completedBatch = null;
-    }
-  }
+  /** A single layer captured for serialization. The data ref is immutable. */
+  private record LayerSnapshot(long entryKey, ChunkColorData data) {}
 
-  /** Snapshots all layers of a chunk entry into the region snapshots map. */
-  private void snapshotEntry(long chunkKey, CaveLayeredEntry entry,
-                             Map<Long, Map<Long, byte[]>> regionSnapshots) {
-    int cx = ChunkPos.getX(chunkKey);
-    int cz = ChunkPos.getZ(chunkKey);
-    int rx = cx >> REGION_SHIFT;
-    int rz = cz >> REGION_SHIFT;
-    long regionKey = ChunkPos.asLong(rx, rz);
-    int localX = cx & 0x1F;
-    int localZ = cz & 0x1F;
+  /** Snapshot of a write that's about to be submitted. */
+  private record PendingWrite(LongOpenHashSet batch, Map<Long, List<LayerSnapshot>> regionLayers) {}
 
-    entry.forEachLayer((layerY, data) -> {
-      short fileLayerY = toFileLayerY(layerY);
-      long entryKey = packEntryKey(localX, localZ, fileLayerY);
-      regionSnapshots.computeIfAbsent(regionKey, k -> new HashMap<>())
-          .put(entryKey, ChunkColorDataCodec.toBytes(data));
-    });
-  }
+  // -- Load --
 
   /**
    * Synchronously loads all region files for the current dimension.
    * Populates the given cache directly. Only v4 files are loaded.
    */
   public void loadDimension(Long2ObjectOpenHashMap<CaveLayeredEntry> cache) {
-    if (dimensionDir == null || !Files.isDirectory(dimensionDir)) return;
+    DimensionState dim = dimension;
+    if (dim == null || !Files.isDirectory(dim.dir)) return;
 
     int loaded = 0;
     int skipped = 0;
-    try (var stream = Files.list(dimensionDir)) {
+    try (var stream = Files.list(dim.dir)) {
       var files = stream.filter(p -> p.getFileName().toString().endsWith(".mapdata")).toList();
       for (Path regionFile : files) {
-        int result = loadRegionFile(regionFile, cache);
-        if (result >= 0) {
-          loaded += result;
-        } else {
-          skipped++;
+        LoadResult result = loadRegionFile(dim, regionFile, cache);
+        switch (result.kind()) {
+          case OK -> loaded += result.entryCount();
+          case INCOMPATIBLE -> skipped++;
+          case BAD_NAME, EMPTY -> { /* silently skip */ }
         }
       }
     } catch (IOException e) {
-      MapnHudMod.LOG.warn("Failed to list map cache directory: {}", dimensionDir, e);
+      MapnHudMod.LOG.warn("Failed to list map cache directory: {}", dim.dir, e);
     }
 
     if (skipped > 0) {
       MapnHudMod.LOG.warn("Skipped {} incompatible region files (non-v4 format)", skipped);
     }
-    MapnHudMod.LOG.info("Loaded {} cached map chunk layers for {}", loaded, dimensionDir);
+    MapnHudMod.LOG.info("Loaded {} cached map chunk layers for {}", loaded, dim.dir);
   }
 
   /** Flushes pending writes and shuts down the IO thread with bounded wait. */
@@ -234,6 +288,7 @@ public final class ChunkCachePersistence {
       Thread.currentThread().interrupt();
       ioExecutor.shutdownNow();
     }
+    dimension = null;
   }
 
   // -- Entry key packing --
@@ -257,34 +312,39 @@ public final class ChunkCachePersistence {
         ? CaveLayeredEntry.SURFACE_LAYER : (int) fileLayerY;
   }
 
-  // -- Region file I/O --
+  // -- Region file I/O (IO thread only) --
 
-  /** Writes region snapshots to disk. Returns true on full success. */
-  private boolean writeRegions(Path dir, Map<Long, Map<Long, byte[]>> regionSnapshots) {
+  /**
+   * Writes the given per-region layer batches to disk. Runs on the IO thread.
+   * For each touched region, fetches (or first-time-loads) the region's
+   * compressed entry map from the dimension's region cache, merges the new
+   * entries, then writes the merged map to disk.
+   */
+  private static boolean writeRegions(DimensionState dim, Map<Long, List<LayerSnapshot>> regionLayers) {
     try {
-      Files.createDirectories(dir);
+      Files.createDirectories(dim.dir);
     } catch (IOException e) {
-      MapnHudMod.LOG.warn("Failed to create map cache directory: {}", dir, e);
+      MapnHudMod.LOG.warn("Failed to create map cache directory: {}", dim.dir, e);
       return false;
     }
 
     boolean allOk = true;
-    for (var regionEntry : regionSnapshots.entrySet()) {
+    for (var regionEntry : regionLayers.entrySet()) {
       long regionKey = regionEntry.getKey();
       int rx = ChunkPos.getX(regionKey);
       int rz = ChunkPos.getZ(regionKey);
-      Path regionPath = dir.resolve("r." + rx + "." + rz + ".mapdata");
+      Path regionPath = dim.dir.resolve("r." + rx + "." + rz + ".mapdata");
 
-      // Read-modify-write: keep existing entries as compressed bytes,
-      // compress new entries, then write all as pre-compressed data.
-      Map<Long, byte[]> merged = readRegionEntries(regionPath);
+      Map<Long, byte[]> merged = dim.regionCache.computeIfAbsent(
+          regionKey, k -> readRegionEntries(regionPath));
 
-      // Compress new raw entries and overwrite into the merged map
-      for (var e : regionEntry.getValue().entrySet()) {
+      // Encode + compress new entries on the IO thread, not on the game thread.
+      for (LayerSnapshot snap : regionEntry.getValue()) {
         try {
-          merged.put(e.getKey(), gzipCompress(e.getValue()));
+          byte[] raw = ChunkColorDataCodec.toBytes(snap.data());
+          merged.put(snap.entryKey(), gzipCompress(raw));
         } catch (IOException ex) {
-          // Skip entries that fail to compress
+          MapnHudMod.LOG.warn("Failed to encode chunk layer in region ({}, {})", rx, rz, ex);
         }
       }
 
@@ -295,63 +355,54 @@ public final class ChunkCachePersistence {
     return allOk;
   }
 
-  /** Reads all entries from a v4 region file. Returns entryKey -> compressed payload. */
-  private Map<Long, byte[]> readRegionEntries(Path path) {
-    Map<Long, byte[]> entries = new HashMap<>();
-    if (!Files.exists(path)) return entries;
-
+  /**
+   * Reads all entries from a v4 region file. Returns an empty map for any
+   * failure (missing file, bad magic, wrong version, IO error).
+   */
+  private static Map<Long, byte[]> readRegionEntries(Path path) {
+    if (!Files.exists(path)) return new HashMap<>();
     try {
       byte[] fileData = Files.readAllBytes(path);
-      int pos = 0;
-
-      if (fileData.length < 7) return entries;
-      for (byte b : MAGIC) {
-        if (fileData[pos++] != b) return entries;
-      }
-
-      int version = fileData[pos++] & 0xFF;
-      if (version != FORMAT_V4) {
-        // Reject non-v4 files
-        return entries;
-      }
-
-      int count = ((fileData[pos++] & 0xFF) << 8) | (fileData[pos++] & 0xFF);
-
-      for (int i = 0; i < count; i++) {
-        // v4 entry: localX(1) + localZ(1) + layerY(2) + flags(1) + payloadLen(4) = 9 bytes header
-        if (pos + 9 > fileData.length) break;
-        int localX = fileData[pos++] & 0xFF;
-        int localZ = fileData[pos++] & 0xFF;
-        short fileLayerY = (short) (((fileData[pos++] & 0xFF) << 8) | (fileData[pos++] & 0xFF));
-        @SuppressWarnings("unused")
-        int flags = fileData[pos++] & 0xFF; // reserved for future use
-        int payloadLen = readInt(fileData, pos); pos += 4;
-        if (payloadLen < 0 || pos + payloadLen > fileData.length) break;
-
-        byte[] payload = new byte[payloadLen];
-        System.arraycopy(fileData, pos, payload, 0, payloadLen);
-        pos += payloadLen;
-
-        long entryKey = packEntryKey(localX, localZ, fileLayerY);
-        entries.put(entryKey, payload);
-      }
+      ParsedHeader header = parseHeader(fileData);
+      if (header == null || header.version() != FORMAT_V4) return new HashMap<>();
+      return parseEntries(fileData, header);
     } catch (IOException e) {
       MapnHudMod.LOG.warn("Failed to read region file: {}", path, e);
+      return new HashMap<>();
     }
-    return entries;
   }
+
+  /**
+   * Parses the magic+version+count header. Returns null if magic doesn't match
+   * or the file is too short. Does NOT validate the version against
+   * {@link #FORMAT_V4} — callers decide whether non-v4 is fatal.
+   */
+  private static ParsedHeader parseHeader(byte[] fileData) {
+    if (fileData.length < 7) return null;
+    for (int i = 0; i < MAGIC.length; i++) {
+      if (fileData[i] != MAGIC[i]) return null;
+    }
+    int version = fileData[4] & 0xFF;
+    int count = ((fileData[5] & 0xFF) << 8) | (fileData[6] & 0xFF);
+    return new ParsedHeader(version, count, 7);
+  }
+
+  private record ParsedHeader(int version, int entryCount, int bodyOffset) {}
 
   /**
    * Writes all entries to a region file atomically. Values are pre-compressed
    * GZIP payloads written directly. Returns true on success.
-   *
-   * <p>Header count always matches the actual number of entries written,
-   * fixing the v2 bug where clamped count diverged from iteration count.
    */
-  private boolean writeRegionFile(Path path, Map<Long, byte[]> entries) {
+  private static boolean writeRegionFile(Path path, Map<Long, byte[]> entries) {
     if (entries.isEmpty()) return true;
 
-    int count = Math.min(entries.size(), 0xFFFF);
+    int totalEntries = entries.size();
+    int count = Math.min(totalEntries, MAX_ENTRIES_PER_REGION);
+    if (totalEntries > MAX_ENTRIES_PER_REGION) {
+      MapnHudMod.LOG.warn(
+          "Region file {} has {} entries, exceeding the {}-entry limit. Truncating.",
+          path.getFileName(), totalEntries, MAX_ENTRIES_PER_REGION);
+    }
 
     Path tmp = path.resolveSibling(path.getFileName() + ".tmp");
     try (OutputStream out = Files.newOutputStream(tmp)) {
@@ -396,36 +447,41 @@ public final class ChunkCachePersistence {
 
   /**
    * Loads a v4 region file and puts entries into the layered cache.
-   * Returns the number of entries loaded, or -1 if the file is incompatible.
+   * Single-pass: parses the header once and dispatches by version, with no
+   * second {@code Files.readAllBytes} for the version check.
    */
-  private int loadRegionFile(Path regionFile,
-                             Long2ObjectOpenHashMap<CaveLayeredEntry> cache) {
+  private LoadResult loadRegionFile(DimensionState dim, Path regionFile,
+                                    Long2ObjectOpenHashMap<CaveLayeredEntry> cache) {
     String name = regionFile.getFileName().toString();
     String[] parts = name.replace(".mapdata", "").split("\\.");
-    if (parts.length != 3 || !parts[0].equals("r")) return 0;
+    if (parts.length != 3 || !parts[0].equals("r")) return LoadResult.badName();
 
     int rx, rz;
     try {
       rx = Integer.parseInt(parts[1]);
       rz = Integer.parseInt(parts[2]);
     } catch (NumberFormatException e) {
-      return 0;
+      return LoadResult.badName();
     }
 
-    // Check version before full read
-    Map<Long, byte[]> entries = readRegionEntries(regionFile);
-    if (entries.isEmpty()) {
-      // Could be empty file or incompatible version
-      if (Files.exists(regionFile)) {
-        try {
-          byte[] header = Files.readAllBytes(regionFile);
-          if (header.length >= 5 && header[4] != FORMAT_V4) {
-            return -1; // incompatible version
-          }
-        } catch (IOException ignored) {}
-      }
-      return 0;
+    byte[] fileData;
+    try {
+      fileData = Files.readAllBytes(regionFile);
+    } catch (IOException e) {
+      MapnHudMod.LOG.warn("Failed to read region file: {}", regionFile, e);
+      return LoadResult.empty();
     }
+
+    ParsedHeader header = parseHeader(fileData);
+    if (header == null) return LoadResult.empty();
+    if (header.version() != FORMAT_V4) return LoadResult.incompatible();
+
+    Map<Long, byte[]> entries = parseEntries(fileData, header);
+    if (entries.isEmpty()) return LoadResult.empty();
+
+    // Cache the parsed entries so the first save in this session doesn't re-read.
+    long regionKey = ChunkPos.asLong(rx, rz);
+    dim.regionCache.put(regionKey, new HashMap<>(entries));
 
     int loaded = 0;
     for (var entry : entries.entrySet()) {
@@ -455,7 +511,40 @@ public final class ChunkCachePersistence {
             cx, cz, layerY, regionFile, e);
       }
     }
-    return loaded;
+    return LoadResult.ok(loaded);
+  }
+
+  /** Parses the entry table given an already-validated header. */
+  private static Map<Long, byte[]> parseEntries(byte[] fileData, ParsedHeader header) {
+    Map<Long, byte[]> entries = new HashMap<>();
+    int pos = header.bodyOffset();
+    int count = header.entryCount();
+    for (int i = 0; i < count; i++) {
+      if (pos + 9 > fileData.length) break;
+      int localX = fileData[pos++] & 0xFF;
+      int localZ = fileData[pos++] & 0xFF;
+      short fileLayerY = (short) (((fileData[pos++] & 0xFF) << 8) | (fileData[pos++] & 0xFF));
+      pos++; // flags
+      int payloadLen = readInt(fileData, pos); pos += 4;
+      if (payloadLen < 0 || pos + payloadLen > fileData.length) break;
+
+      byte[] payload = new byte[payloadLen];
+      System.arraycopy(fileData, pos, payload, 0, payloadLen);
+      pos += payloadLen;
+
+      long entryKey = packEntryKey(localX, localZ, fileLayerY);
+      entries.put(entryKey, payload);
+    }
+    return entries;
+  }
+
+  /** Result of trying to load one region file. */
+  private record LoadResult(Kind kind, int entryCount) {
+    enum Kind { OK, INCOMPATIBLE, BAD_NAME, EMPTY }
+    static LoadResult ok(int n) { return new LoadResult(Kind.OK, n); }
+    static LoadResult incompatible() { return new LoadResult(Kind.INCOMPATIBLE, 0); }
+    static LoadResult badName() { return new LoadResult(Kind.BAD_NAME, 0); }
+    static LoadResult empty() { return new LoadResult(Kind.EMPTY, 0); }
   }
 
   // -- Path resolution --

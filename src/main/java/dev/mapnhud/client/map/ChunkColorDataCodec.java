@@ -44,13 +44,13 @@ public final class ChunkColorDataCodec {
 
     buf[pos++] = SERIAL_VERSION;
     buf[pos++] = data.isCaveData() ? MODE_CAVE : MODE_SURFACE;
-    pos = writeInts(buf, pos, data.baseColors());
-    pos = writeInts(buf, pos, data.heights());
-    pos = writeInts(buf, pos, data.waterDepths());
-    pos = writeInts(buf, pos, data.waterTints());
-    packBooleans(buf, pos, data.isLeafArray());
+    pos = writeInts(buf, pos, data.baseColorsForCodec());
+    pos = writeInts(buf, pos, data.heightsForCodec());
+    pos = writeInts(buf, pos, data.waterDepthsForCodec());
+    pos = writeInts(buf, pos, data.waterTintsForCodec());
+    packBooleans(buf, pos, data.isLeafArrayForCodec());
     pos += ChunkColorData.PIXELS / 8;
-    packBooleans(buf, pos, data.knownArray());
+    packBooleans(buf, pos, data.knownArrayForCodec());
     return buf;
   }
 
@@ -89,7 +89,9 @@ public final class ChunkColorDataCodec {
     pos += ChunkColorData.PIXELS / 8;
     unpackBooleans(buf, pos, known);
 
-    return ChunkColorData.fromCodec(baseColors, heights, waterDepths, waterTints, isLeaf, known, isCave);
+    return isCave
+        ? ChunkColorData.fromCodecCave(baseColors, heights, waterDepths, waterTints, isLeaf, known)
+        : ChunkColorData.fromCodecSurface(baseColors, heights, waterDepths, waterTints, isLeaf, known);
   }
 
   private static int writeInts(byte[] buf, int pos, int[] arr) {
