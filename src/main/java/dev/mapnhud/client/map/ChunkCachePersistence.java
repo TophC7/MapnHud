@@ -1,6 +1,7 @@
 package dev.mapnhud.client.map;
 
 import dev.mapnhud.MapnHudMod;
+import dev.mapnhud.client.map.cave.CaveLayeredEntry;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import java.io.ByteArrayOutputStream;
@@ -31,7 +32,7 @@ import net.minecraft.world.level.ChunkPos;
  * (surface + cave at different Y depths). The layerY is stored per entry
  * in the region file.
  *
- * <h3>Region file format (v3)</h3>
+ * <h3>Region file format (v4)</h3>
  * <pre>
  * Header:  "FXMP" (4B) | version (1B) | entry count (2B unsigned)
  * Per entry: localX (1B) | localZ (1B) | layerY (2B signed short) | flags (1B) | payload length (4B) | GZIP payload
@@ -49,7 +50,7 @@ import net.minecraft.world.level.ChunkPos;
 public final class ChunkCachePersistence {
 
   private static final byte[] MAGIC = {'F', 'X', 'M', 'P'};
-  private static final byte FORMAT_V3 = 3;
+  private static final byte FORMAT_V4 = 4;
 
   /** Short value representing surface layer in the file format. */
   private static final short FILE_SURFACE_LAYER = Short.MAX_VALUE;
@@ -102,7 +103,7 @@ public final class ChunkCachePersistence {
    * Snapshots dirty chunks and submits writes to the IO thread.
    * Only clears dirty entries after the previous batch confirmed success.
    */
-  public void saveDirty(Long2ObjectOpenHashMap<ChunkColorCache.LayeredEntry> cache) {
+  public void saveDirty(Long2ObjectOpenHashMap<CaveLayeredEntry> cache) {
     if (dimensionDir == null) return;
 
     // Acknowledge completed batch from previous IO cycle
@@ -114,7 +115,7 @@ public final class ChunkCachePersistence {
     Map<Long, Map<Long, byte[]>> regionSnapshots = new HashMap<>();
 
     for (long key : batch) {
-      ChunkColorCache.LayeredEntry entry = cache.get(key);
+      CaveLayeredEntry entry = cache.get(key);
       if (entry == null) continue;
       snapshotEntry(key, entry, regionSnapshots);
     }
@@ -138,7 +139,7 @@ public final class ChunkCachePersistence {
    * Snapshots all cached chunks and submits a full save. Dirty entries are
    * only cleared after write success, matching saveDirty() durability.
    */
-  public void saveAll(Long2ObjectOpenHashMap<ChunkColorCache.LayeredEntry> cache) {
+  public void saveAll(Long2ObjectOpenHashMap<CaveLayeredEntry> cache) {
     if (dimensionDir == null || cache.isEmpty()) return;
 
     acknowledgePreviousBatch();
@@ -173,7 +174,7 @@ public final class ChunkCachePersistence {
   }
 
   /** Snapshots all layers of a chunk entry into the region snapshots map. */
-  private void snapshotEntry(long chunkKey, ChunkColorCache.LayeredEntry entry,
+  private void snapshotEntry(long chunkKey, CaveLayeredEntry entry,
                              Map<Long, Map<Long, byte[]>> regionSnapshots) {
     int cx = ChunkPos.getX(chunkKey);
     int cz = ChunkPos.getZ(chunkKey);
@@ -183,21 +184,19 @@ public final class ChunkCachePersistence {
     int localX = cx & 0x1F;
     int localZ = cz & 0x1F;
 
-    for (int i = 0; i < entry.count(); i++) {
-      int layerY = entry.layerY(i);
+    entry.forEachLayer((layerY, data) -> {
       short fileLayerY = toFileLayerY(layerY);
       long entryKey = packEntryKey(localX, localZ, fileLayerY);
       regionSnapshots.computeIfAbsent(regionKey, k -> new HashMap<>())
-          .put(entryKey, entry.data(i).toBytes());
-    }
+          .put(entryKey, ChunkColorDataCodec.toBytes(data));
+    });
   }
 
   /**
    * Synchronously loads all region files for the current dimension.
-   * Populates the given cache directly. Only v3 files are loaded;
-   * older format files are skipped with a warning.
+   * Populates the given cache directly. Only v4 files are loaded.
    */
-  public void loadDimension(Long2ObjectOpenHashMap<ChunkColorCache.LayeredEntry> cache) {
+  public void loadDimension(Long2ObjectOpenHashMap<CaveLayeredEntry> cache) {
     if (dimensionDir == null || !Files.isDirectory(dimensionDir)) return;
 
     int loaded = 0;
@@ -217,7 +216,7 @@ public final class ChunkCachePersistence {
     }
 
     if (skipped > 0) {
-      MapnHudMod.LOG.warn("Skipped {} incompatible region files (pre-v3 format)", skipped);
+      MapnHudMod.LOG.warn("Skipped {} incompatible region files (non-v4 format)", skipped);
     }
     MapnHudMod.LOG.info("Loaded {} cached map chunk layers for {}", loaded, dimensionDir);
   }
@@ -249,13 +248,13 @@ public final class ChunkCachePersistence {
   private static short entryFileLayerY(long entryKey) { return (short) (entryKey & 0xFFFF); }
 
   private static short toFileLayerY(int layerY) {
-    return layerY == ChunkColorCache.LayeredEntry.SURFACE_LAYER
+    return layerY == CaveLayeredEntry.SURFACE_LAYER
         ? FILE_SURFACE_LAYER : (short) layerY;
   }
 
   private static int fromFileLayerY(short fileLayerY) {
     return fileLayerY == FILE_SURFACE_LAYER
-        ? ChunkColorCache.LayeredEntry.SURFACE_LAYER : fileLayerY;
+        ? CaveLayeredEntry.SURFACE_LAYER : (int) fileLayerY;
   }
 
   // -- Region file I/O --
@@ -296,7 +295,7 @@ public final class ChunkCachePersistence {
     return allOk;
   }
 
-  /** Reads all entries from a v3 region file. Returns entryKey -> compressed payload. */
+  /** Reads all entries from a v4 region file. Returns entryKey -> compressed payload. */
   private Map<Long, byte[]> readRegionEntries(Path path) {
     Map<Long, byte[]> entries = new HashMap<>();
     if (!Files.exists(path)) return entries;
@@ -311,15 +310,15 @@ public final class ChunkCachePersistence {
       }
 
       int version = fileData[pos++] & 0xFF;
-      if (version != FORMAT_V3) {
-        // Reject non-v3 files
+      if (version != FORMAT_V4) {
+        // Reject non-v4 files
         return entries;
       }
 
       int count = ((fileData[pos++] & 0xFF) << 8) | (fileData[pos++] & 0xFF);
 
       for (int i = 0; i < count; i++) {
-        // v3 entry: localX(1) + localZ(1) + layerY(2) + flags(1) + payloadLen(4) = 9 bytes header
+        // v4 entry: localX(1) + localZ(1) + layerY(2) + flags(1) + payloadLen(4) = 9 bytes header
         if (pos + 9 > fileData.length) break;
         int localX = fileData[pos++] & 0xFF;
         int localZ = fileData[pos++] & 0xFF;
@@ -357,7 +356,7 @@ public final class ChunkCachePersistence {
     Path tmp = path.resolveSibling(path.getFileName() + ".tmp");
     try (OutputStream out = Files.newOutputStream(tmp)) {
       out.write(MAGIC);
-      out.write(FORMAT_V3);
+      out.write(FORMAT_V4);
       out.write((count >> 8) & 0xFF);
       out.write(count & 0xFF);
 
@@ -396,11 +395,11 @@ public final class ChunkCachePersistence {
   }
 
   /**
-   * Loads a v3 region file and puts entries into the layered cache.
+   * Loads a v4 region file and puts entries into the layered cache.
    * Returns the number of entries loaded, or -1 if the file is incompatible.
    */
   private int loadRegionFile(Path regionFile,
-                             Long2ObjectOpenHashMap<ChunkColorCache.LayeredEntry> cache) {
+                             Long2ObjectOpenHashMap<CaveLayeredEntry> cache) {
     String name = regionFile.getFileName().toString();
     String[] parts = name.replace(".mapdata", "").split("\\.");
     if (parts.length != 3 || !parts[0].equals("r")) return 0;
@@ -420,7 +419,7 @@ public final class ChunkCachePersistence {
       if (Files.exists(regionFile)) {
         try {
           byte[] header = Files.readAllBytes(regionFile);
-          if (header.length >= 5 && header[4] != FORMAT_V3) {
+          if (header.length >= 5 && header[4] != FORMAT_V4) {
             return -1; // incompatible version
           }
         } catch (IOException ignored) {}
@@ -441,12 +440,12 @@ public final class ChunkCachePersistence {
 
       try {
         byte[] decompressed = gzipDecompress(entry.getValue());
-        ChunkColorData data = ChunkColorData.fromBytes(decompressed);
+        ChunkColorData data = ChunkColorDataCodec.fromBytes(decompressed);
 
         long chunkKey = ChunkPos.asLong(cx, cz);
-        ChunkColorCache.LayeredEntry layered = cache.get(chunkKey);
+        CaveLayeredEntry layered = cache.get(chunkKey);
         if (layered == null) {
-          layered = new ChunkColorCache.LayeredEntry();
+          layered = new CaveLayeredEntry();
           cache.put(chunkKey, layered);
         }
         layered.put(layerY, data);

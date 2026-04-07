@@ -37,6 +37,12 @@ public final class ChunkCacheEventHandler {
   }
 
   @SubscribeEvent
+  public static void onChunkUnload(ChunkEvent.Unload event) {
+    if (!event.getLevel().isClientSide()) return;
+    CACHE.onChunkUnload(event.getChunk().getPos().x, event.getChunk().getPos().z);
+  }
+
+  @SubscribeEvent
   public static void onLevelLoad(LevelEvent.Load event) {
     if (!(event.getLevel() instanceof ClientLevel clientLevel)) return;
     // Save previous dimension's data before clearing
@@ -68,7 +74,6 @@ public final class ChunkCacheEventHandler {
 
     boolean caveMode = dev.mapnhud.client.CaveModeTracker.isCaveMode();
     cacheUpdatedThisTick = CACHE.tick(mc.level, mc.player.blockPosition(), caveMode,
-        dev.mapnhud.client.MinimapConfigCache.getScanRadiusChunks(),
         dev.mapnhud.client.MinimapConfigCache.getCaveScanRadiusChunks(),
         dev.mapnhud.client.MinimapConfigCache.getCaveFloodRadiusBlocks());
   }

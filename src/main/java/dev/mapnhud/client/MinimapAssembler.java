@@ -1,9 +1,11 @@
 package dev.mapnhud.client;
 
 import com.mojang.blaze3d.platform.NativeImage;
+import dev.mapnhud.client.map.CaveFloodFill;
 import dev.mapnhud.client.map.ChunkColorCache;
 import dev.mapnhud.client.map.ChunkColorData;
 import dev.mapnhud.client.map.ChunkScanner;
+import dev.mapnhud.client.map.cave.CaveFieldState;
 
 /**
  * Two-pass viewport shader that gathers raw column data from the chunk cache
@@ -31,6 +33,8 @@ public class MinimapAssembler {
 
   /** Wall color for cave mode solid columns (ABGR format). */
   private static final int WALL_COLOR = ChunkScanner.abgrFromArgb(0xFF000000);
+  /** Unknown color for cave columns that are not confirmed as walls yet. */
+  private static final int UNKNOWN_COLOR = ChunkScanner.abgrFromArgb(0xFF111111);
 
   // -- Pre-allocated viewport arrays (recreated when mapSize changes) --
 
@@ -39,6 +43,7 @@ public class MinimapAssembler {
   private int[] vHeights;
   private int[] vWaterDepths;
   private int[] vWaterTints;
+  private byte[] vFieldStates;
   private boolean[] vIsLeaf;
   private boolean[] vKnown;
   private boolean[] vHasData;
@@ -76,6 +81,7 @@ public class MinimapAssembler {
     vHeights = new int[len];
     vWaterDepths = new int[len];
     vWaterTints = new int[len];
+    vFieldStates = new byte[len];
     vIsLeaf = new boolean[len];
     vKnown = new boolean[len];
     vHasData = new boolean[len];
@@ -97,6 +103,8 @@ public class MinimapAssembler {
     int lastCx = Integer.MIN_VALUE;
     int lastCz = Integer.MIN_VALUE;
     ChunkColorData lastData = null;
+    boolean caveMode = cache.isCaveMode();
+    CaveFloodFill.Result flood = caveMode ? cache.getFloodResult() : CaveFloodFill.EMPTY;
 
     for (int px = 0; px < mapSize; px++) {
       int wx = minWorldX + px * scale;
@@ -106,6 +114,13 @@ public class MinimapAssembler {
         int wz = minWorldZ + pz * scale;
         int cz = wz >> 4;
         int i = px * mapSize + pz;
+
+        if (caveMode && !flood.isOutsideRadius(wx, wz) && !flood.isReachable(wx, wz)) {
+          vFieldStates[i] = currentFloodFieldState(flood, wx, wz, cx, cz);
+          vKnown[i] = false;
+          vHasData[i] = true;
+          continue;
+        }
 
         if (cx != lastCx || cz != lastCz) {
           lastData = cache.get(cx, cz);
@@ -120,14 +135,26 @@ public class MinimapAssembler {
           vHeights[i] = lastData.getHeight(lx, lz);
           vWaterDepths[i] = lastData.getWaterDepth(lx, lz);
           vWaterTints[i] = lastData.getWaterTint(lx, lz);
+          vFieldStates[i] = lastData.getFieldState(lx, lz);
           vIsLeaf[i] = lastData.isLeaf(lx, lz);
           vKnown[i] = lastData.isKnown(lx, lz);
           vHasData[i] = true;
         } else {
+          vFieldStates[i] = 0;
           vHasData[i] = false;
         }
       }
     }
+  }
+
+  private static byte currentFloodFieldState(
+      CaveFloodFill.Result flood, int wx, int wz, int cx, int cz) {
+    if (!flood.complete()
+        || flood.isUnknownChunk(cx, cz)
+        || flood.isOutsideRadius(wx, wz)) {
+      return CaveFieldState.UNKNOWN;
+    }
+    return CaveFieldState.BOUNDARY;
   }
 
   /**
@@ -180,7 +207,10 @@ public class MinimapAssembler {
           continue;
         }
         if (!vKnown[i]) {
-          image.setPixelRGBA(px, pz, WALL_COLOR);
+          image.setPixelRGBA(px, pz,
+              CaveFieldState.has(vFieldStates[i], CaveFieldState.UNKNOWN)
+                  ? UNKNOWN_COLOR
+                  : WALL_COLOR);
           continue;
         }
 
@@ -254,7 +284,10 @@ public class MinimapAssembler {
           continue;
         }
         if (!vKnown[i]) {
-          image.setPixelRGBA(px, pz, WALL_COLOR);
+          image.setPixelRGBA(px, pz,
+              CaveFieldState.has(vFieldStates[i], CaveFieldState.UNKNOWN)
+                  ? UNKNOWN_COLOR
+                  : WALL_COLOR);
           continue;
         }
 

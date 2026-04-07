@@ -1,5 +1,6 @@
 package dev.mapnhud.client.map;
 
+import dev.mapnhud.client.map.cave.CaveFieldState;
 import java.util.Set;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.color.block.BlockColors;
@@ -89,7 +90,7 @@ public final class ChunkScanner {
    * <p>The flood fill determines which (x, z) columns are reachable from the
    * player and at what walking Y. This method uses that as a "cave heightmap":
    * reachable columns get scanned downward from their walking Y (same pipeline
-   * as surface mode), non-reachable columns are walls.
+   * as surface mode). Non-reachable columns are tagged as boundary or unknown.
    *
    * <p>This produces the same data format as {@link #scan}, so the assembler's
    * shading pipeline (heightfield normals, AO, water blending) works unchanged.
@@ -99,20 +100,53 @@ public final class ChunkScanner {
   public static ChunkColorData scanCave(
       ChunkAccess chunk, Level level, CaveFloodFill.Result flood) {
 
+    int chunkX = chunk.getPos().x;
+    int chunkZ = chunk.getPos().z;
     int chunkWorldX = chunk.getPos().getMinBlockX();
     int chunkWorldZ = chunk.getPos().getMinBlockZ();
+    boolean chunkUnknown = flood.isUnknownChunk(chunkX, chunkZ);
+    boolean floodComplete = flood.complete();
 
-    // Skip chunks with no reachable columns. Returning null prevents
-    // overwriting persisted cave data with all-walls black.
+    // Skip fully unreachable chunks unless they are currently unknown frontier.
     boolean anyReachable = false;
-    for (int lx = 0; lx < 16 && !anyReachable; lx++) {
-      for (int lz = 0; lz < 16 && !anyReachable; lz++) {
-        if (flood.isReachable(chunkWorldX + lx, chunkWorldZ + lz)) {
+    boolean anyInsideRadius = false;
+    for (int lx = 0; lx < 16; lx++) {
+      for (int lz = 0; lz < 16; lz++) {
+        int worldX = chunkWorldX + lx;
+        int worldZ = chunkWorldZ + lz;
+        if (!flood.isOutsideRadius(worldX, worldZ)) {
+          anyInsideRadius = true;
+        }
+        if (flood.isReachable(worldX, worldZ)) {
           anyReachable = true;
         }
       }
     }
-    if (!anyReachable) return null;
+    if (!anyReachable) {
+      if (!anyInsideRadius && !chunkUnknown) return null;
+
+      boolean[] known = new boolean[ChunkColorData.PIXELS];
+      byte[] fieldStates = new byte[ChunkColorData.PIXELS];
+      for (int lx = 0; lx < 16; lx++) {
+        int worldX = chunkWorldX + lx;
+        for (int lz = 0; lz < 16; lz++) {
+          int worldZ = chunkWorldZ + lz;
+          int idx = lx * 16 + lz;
+          boolean outsideRadius = flood.isOutsideRadius(worldX, worldZ);
+          fieldStates[idx] = (!floodComplete || chunkUnknown || outsideRadius)
+              ? CaveFieldState.UNKNOWN
+              : CaveFieldState.BOUNDARY;
+        }
+      }
+      return new ChunkColorData(
+          new int[ChunkColorData.PIXELS],
+          new int[ChunkColorData.PIXELS],
+          new int[ChunkColorData.PIXELS],
+          new int[ChunkColorData.PIXELS],
+          new boolean[ChunkColorData.PIXELS],
+          known,
+          fieldStates);
+    }
 
     int[] baseColors = new int[ChunkColorData.PIXELS];
     int[] heights = new int[ChunkColorData.PIXELS];
@@ -120,6 +154,7 @@ public final class ChunkScanner {
     int[] waterTints = new int[ChunkColorData.PIXELS];
     boolean[] isLeaf = new boolean[ChunkColorData.PIXELS];
     boolean[] known = new boolean[ChunkColorData.PIXELS];
+    byte[] fieldStates = new byte[ChunkColorData.PIXELS];
 
     BlockPos.MutableBlockPos mutable = new BlockPos.MutableBlockPos();
     BlockColors blockColors = Minecraft.getInstance().getBlockColors();
@@ -132,8 +167,10 @@ public final class ChunkScanner {
         int idx = localX * 16 + localZ;
 
         if (!flood.isReachable(worldX, worldZ)) {
-          // Unreachable: known stays false, no terrain data written.
-          // The assembler renders these as walls or placeholders.
+          boolean outsideRadius = flood.isOutsideRadius(worldX, worldZ);
+          fieldStates[idx] = (!floodComplete || chunkUnknown || outsideRadius)
+              ? CaveFieldState.UNKNOWN
+              : CaveFieldState.BOUNDARY;
           continue;
         }
 
@@ -143,10 +180,12 @@ public final class ChunkScanner {
         processColumn(blockColors, level, mutable, worldX, worldZ, col, idx,
             baseColors, heights, waterDepths, waterTints, isLeaf);
         known[idx] = true;
+        fieldStates[idx] = CaveFieldState.REACHABLE;
       }
     }
 
-    return new ChunkColorData(baseColors, heights, waterDepths, waterTints, isLeaf, known);
+    return new ChunkColorData(
+        baseColors, heights, waterDepths, waterTints, isLeaf, known, fieldStates);
   }
 
   /**

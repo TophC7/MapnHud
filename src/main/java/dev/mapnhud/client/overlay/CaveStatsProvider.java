@@ -2,7 +2,9 @@ package dev.mapnhud.client.overlay;
 
 import dev.mapnhud.client.CaveModeTracker;
 import dev.mapnhud.client.map.CaveFloodFill;
+import dev.mapnhud.client.map.ChunkColorCache;
 import dev.mapnhud.client.map.ChunkCacheEventHandler;
+import dev.mapnhud.client.map.cave.CaveCacheDiagnostics;
 import net.minecraft.client.Minecraft;
 
 /**
@@ -18,7 +20,24 @@ public final class CaveStatsProvider implements InfoProvider {
   public String getText(Minecraft mc) {
     if (!CaveModeTracker.isCaveMode()) return null;
 
-    CaveFloodFill.Result flood = ChunkCacheEventHandler.getCache().getFloodResult();
-    return String.format("Cave: %d cols, %.1fms", flood.columnsReachable(), flood.elapsedMs());
+    ChunkColorCache cache = ChunkCacheEventHandler.getCache();
+    CaveFloodFill.Result flood = cache.getFloodResult();
+    if (!CaveCacheDiagnostics.ENABLED) {
+      return String.format("Cave: %d cols, %.1fms", flood.columnsReachable(), flood.elapsedMs());
+    }
+
+    CaveCacheDiagnostics.DebugSnapshot debug = cache.getDebugSnapshot();
+    return String.format(
+        "Cave: cols=%d %.1fms q=%d/%d/%d/%d near(miss=%d dead=%d) drop=%d requeue=%d",
+        flood.columnsReachable(),
+        flood.elapsedMs(),
+        debug.priorityQueueSize(),
+        debug.scanQueueSize(),
+        debug.refloodQueueSize(),
+        debug.navQueueSize(),
+        debug.nearMissingChunks(),
+        debug.nearSuspectDeadChunks(),
+        debug.totalDroppedScans(),
+        debug.totalRequeues());
   }
 }

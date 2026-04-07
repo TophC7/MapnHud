@@ -1,59 +1,85 @@
 package dev.mapnhud.client.map;
 
+import dev.mapnhud.client.map.cave.CaveStandability;
 import it.unimi.dsi.fastutil.longs.Long2IntMap;
 import it.unimi.dsi.fastutil.longs.Long2IntMaps;
 import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
+import it.unimi.dsi.fastutil.longs.LongSet;
+import it.unimi.dsi.fastutil.longs.LongSets;
 import java.util.Arrays;
 import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
-import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.levelgen.Heightmap;
 
 /**
- * 2D breadth-first flood fill that determines reachable cave columns from the
- * player's position. Walks the XZ grid following passable 2-block gaps, tracking
- * the walking Y at each step and allowing vertical transitions within the step
- * delta (staircases, slopes).
+ * Incremental flood fill over standable cave poses.
  *
- * <p>The result is a map of reachable (x, z) columns to their walking Y. This
- * serves as a "cave heightmap" that replaces the WORLD_SURFACE heightmap used
- * in surface mode. Columns not in the result are walls.
+ * <p>Traversal runs on (x, y, z) states to avoid poisoning columns when a
+ * failed Y path arrives before a valid one. Rendering still consumes the
+ * collapsed (x, z) -> y map.
  *
- * <p>Performance: the flood runs in a single pass when triggered (every few
- * blocks of player movement). Typical cost is 1-3ms for 5,000-10,000 columns.
+ * <p>The flood is time-budgeted: each {@link #advance} call processes BFS
+ * states for a configurable nanosecond budget, then returns the current
+ * partial result. Call {@link #start} to begin a new flood (allocates
+ * fresh result collections so previous {@link Result} references stay
+ * valid).
  */
 public final class CaveFloodFill {
 
-  private CaveFloodFill() {}
-
-  /** Max Y delta per BFS step. 2 handles standard stairs and uneven floors. */
+  /** Max Y delta per BFS step. Handles stairs and uneven floors. */
   private static final int STEP_DELTA = 2;
 
   /** Cardinal neighbor offsets (N, S, E, W). */
   private static final int[][] DIRS = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
 
+  /** Check System.nanoTime() every N iterations to amortize the syscall. */
+  private static final int BUDGET_CHECK_MASK = 63; // power-of-two minus one
+
   /**
-   * Result of a cave flood fill. Contains the reachable column set and
-   * performance metrics for debugging.
+   * Result of a cave flood fill. Wraps a live reference to the reachable
+   * column map — the map grows during {@link #advance} calls but is never
+   * cleared while this Result is held (new floods allocate fresh maps).
    *
-   * @param reachable  packed (x, z) -> walking Y for each reachable column
-   * @param columnsVisited total columns the BFS examined (including walls)
-   * @param columnsReachable columns that were passable (subset of visited)
-   * @param elapsedNanos   wall-clock time the flood took
+   * @param reachable packed (x, z) -> walking Y for each reachable column
+   * @param unknownChunkFrontier neighboring chunks not loaded during graph prune
+   * @param columnsVisited total 3D states the BFS examined so far
+   * @param columnsReachable unique reachable columns in the collapsed field
+   * @param complete true when the flood finished for this origin
+   * @param originX flood origin block X
+   * @param originZ flood origin block Z
+   * @param maxRadiusSq squared flood radius in block units
+   * @param elapsedNanos cumulative wall-clock time across all advance calls
    */
   public record Result(
       Long2IntMap reachable,
+      LongSet unknownChunkFrontier,
       int columnsVisited,
       int columnsReachable,
+      boolean complete,
+      int originX,
+      int originZ,
+      int maxRadiusSq,
       long elapsedNanos
   ) {
     public boolean isReachable(int blockX, int blockZ) {
-      return reachable.containsKey(packXZ(blockX, blockZ));
+      return reachable.containsKey(ChunkPos.asLong(blockX, blockZ));
     }
 
     public int getWalkingY(int blockX, int blockZ) {
-      return reachable.get(packXZ(blockX, blockZ));
+      return reachable.get(ChunkPos.asLong(blockX, blockZ));
+    }
+
+    public boolean isUnknownChunk(int chunkX, int chunkZ) {
+      return unknownChunkFrontier.contains(ChunkPos.asLong(chunkX, chunkZ));
+    }
+
+    public boolean isOutsideRadius(int blockX, int blockZ) {
+      if (maxRadiusSq < 0) return true;
+      long dx = (long) blockX - originX;
+      long dz = (long) blockZ - originZ;
+      return dx * dx + dz * dz > maxRadiusSq;
     }
 
     public double elapsedMs() {
@@ -61,133 +87,234 @@ public final class CaveFloodFill {
     }
   }
 
-  /** Empty result for when flood fill hasn't run yet. */
+  /** Empty result for when no flood has run. */
   public static final Result EMPTY = new Result(
-      Long2IntMaps.unmodifiable(new Long2IntOpenHashMap()), 0, 0, 0);
+      Long2IntMaps.unmodifiable(new Long2IntOpenHashMap()),
+      LongSets.emptySet(), 0, 0, true, 0, 0, -1, 0);
+
+  // -- BFS queue (arrays reused across starts, grown on demand) --
+
+  private int[] queueX, queueZ, queueY;
+  private int head, tail, capacity;
+
+  // -- Per-flood state (fresh allocation per start for result isolation) --
+
+  private Long2IntOpenHashMap reachable;
+  private LongOpenHashSet visitedPoses;
+  private LongSet unknownChunkFrontier;
+
+  // -- Flood parameters --
+
+  private int originX, originY, originZ;
+  private int maxRadiusSq;
+  private LongSet allowedChunks;
+  private int minBuildHeight, maxBuildHeight;
+
+  // -- Status --
+
+  private boolean active;
+  private boolean complete;
+  private int statesVisited;
+  private long totalElapsedNanos;
+
+  // -- Scratch (reused across advance calls, avoids allocation) --
+
+  private final BlockPos.MutableBlockPos mutable = new BlockPos.MutableBlockPos();
+
+  public CaveFloodFill() {
+    capacity = 8192;
+    queueX = new int[capacity];
+    queueZ = new int[capacity];
+    queueY = new int[capacity];
+  }
 
   /**
-   * Flood-fills reachable cave space from the player's position.
-   *
-   * @param level     the client level for block state reads
-   * @param origin    player's block position (feet level)
-   * @param maxRadius maximum XZ distance from origin to explore
-   * @return the reachable column set with walking Y values and perf stats
+   * Starts a new flood from the given origin. Allocates fresh result
+   * collections so any previously returned {@link Result} objects stay
+   * valid with their data intact.
    */
-  public static Result flood(Level level, BlockPos origin, int maxRadius) {
-    long startTime = System.nanoTime();
+  public void start(Level level, BlockPos origin, int maxRadius,
+      LongSet allowedChunks, LongSet unknownChunkFrontier) {
+    this.originX = origin.getX();
+    this.originY = origin.getY();
+    this.originZ = origin.getZ();
+    this.maxRadiusSq = maxRadius * maxRadius;
+    this.allowedChunks = allowedChunks;
+    this.unknownChunkFrontier = unknownChunkFrontier != null
+        ? unknownChunkFrontier : LongSets.emptySet();
+    this.minBuildHeight = level.getMinBuildHeight();
+    this.maxBuildHeight = level.getMaxBuildHeight() - 1;
 
-    int originX = origin.getX();
-    int originZ = origin.getZ();
-    int originY = origin.getY();
-    int maxRadiusSq = maxRadius * maxRadius;
+    // Fresh collections so old Results keep their data
+    this.reachable = new Long2IntOpenHashMap();
+    this.reachable.defaultReturnValue(Integer.MIN_VALUE);
+    this.visitedPoses = new LongOpenHashSet();
 
-    Long2IntOpenHashMap reachable = new Long2IntOpenHashMap();
-    reachable.defaultReturnValue(Integer.MIN_VALUE);
-    LongOpenHashSet visited = new LongOpenHashSet();
+    head = 0;
+    tail = 0;
+    statesVisited = 0;
+    totalElapsedNanos = 0;
+    complete = false;
+    active = true;
 
-    // Flat int arrays as BFS queue to avoid per-entry object allocation.
-    // Linear queue (head/tail), grown on demand.
-    int capacity = 8192;
-    int[] queueX = new int[capacity];
-    int[] queueZ = new int[capacity];
-    int[] queueY = new int[capacity];
-    int head = 0, tail = 0;
-
-    BlockPos.MutableBlockPos mutable = new BlockPos.MutableBlockPos();
-    if (isPassableAt(level, mutable, originX, originY, originZ)) {
-      long originKey = packXZ(originX, originZ);
-      visited.add(originKey);
-      queueX[tail] = originX;
-      queueZ[tail] = originZ;
-      queueY[tail] = originY;
-      tail++;
+    // Reject if origin chunk is outside the allowed set
+    long originChunk = ChunkPos.asLong(originX >> 4, originZ >> 4);
+    if (allowedChunks != null && !allowedChunks.contains(originChunk)) {
+      complete = true;
+      return;
     }
 
-    int columnsVisited = 0;
-    int columnsReachable = 0;
+    // Seed BFS from origin
+    int startY = findWalkableY(level, originX, originZ, originY);
+    if (startY != Integer.MIN_VALUE) {
+      visitedPoses.add(packXYZ(originX, startY, originZ));
+      enqueue(originX, originZ, startY);
+    } else {
+      complete = true;
+    }
+  }
+
+  /**
+   * Advances the in-progress flood for up to {@code budgetNanos}
+   * nanoseconds, then returns the current result (partial or complete).
+   */
+  public Result advance(Level level, long budgetNanos) {
+    if (!active || complete) return currentResult();
+
+    long startTime = System.nanoTime();
+    int batch = 0;
 
     while (head < tail) {
+      if ((batch & BUDGET_CHECK_MASK) == 0 && batch > 0
+          && System.nanoTime() - startTime > budgetNanos) {
+        break;
+      }
+
       int x = queueX[head];
       int z = queueZ[head];
       int y = queueY[head];
       head++;
-      columnsVisited++;
+      statesVisited++;
+      batch++;
 
       int dx = x - originX;
       int dz = z - originZ;
       if (dx * dx + dz * dz > maxRadiusSq) continue;
 
-      reachable.put(packXZ(x, z), y);
-      columnsReachable++;
+      // Update reachable column, preferring the Y closest to origin
+      long columnKey = ChunkPos.asLong(x, z);
+      int currentY = reachable.get(columnKey);
+      if (currentY == Integer.MIN_VALUE
+          || Math.abs(y - originY) < Math.abs(currentY - originY)) {
+        reachable.put(columnKey, y);
+      }
 
       for (int[] dir : DIRS) {
         int nx = x + dir[0];
         int nz = z + dir[1];
-        long nKey = packXZ(nx, nz);
-        if (visited.contains(nKey)) continue;
-        visited.add(nKey);
+        int ndx = nx - originX;
+        int ndz = nz - originZ;
+        if (ndx * ndx + ndz * ndz > maxRadiusSq) continue;
 
-        int walkY = findWalkableY(level, mutable, nx, nz, y, STEP_DELTA);
-        if (walkY != Integer.MIN_VALUE) {
-          // Don't escape to surface: skip columns at or above the heightmap
-          int surfaceY = level.getHeight(Heightmap.Types.WORLD_SURFACE, nx, nz);
-          if (walkY >= surfaceY - 1) continue;
-          if (tail >= capacity) {
-            capacity *= 2;
-            queueX = Arrays.copyOf(queueX, capacity);
-            queueZ = Arrays.copyOf(queueZ, capacity);
-            queueY = Arrays.copyOf(queueY, capacity);
-          }
-          queueX[tail] = nx;
-          queueZ[tail] = nz;
-          queueY[tail] = walkY;
-          tail++;
+        if (allowedChunks != null
+            && !allowedChunks.contains(ChunkPos.asLong(nx >> 4, nz >> 4))) {
+          continue;
         }
+
+        int walkY = findWalkableY(level, nx, nz, y);
+        if (walkY == Integer.MIN_VALUE) continue;
+
+        // Don't escape to surface
+        int surfaceY = level.getHeight(Heightmap.Types.WORLD_SURFACE, nx, nz);
+        if (walkY >= surfaceY - 1) continue;
+
+        long poseKey = packXYZ(nx, walkY, nz);
+        if (!visitedPoses.add(poseKey)) continue;
+
+        enqueue(nx, nz, walkY);
       }
     }
 
-    long elapsed = System.nanoTime() - startTime;
-    return new Result(reachable, columnsVisited, columnsReachable, elapsed);
+    totalElapsedNanos += System.nanoTime() - startTime;
+    if (head >= tail) complete = true;
+    return currentResult();
   }
 
-  /**
-   * Checks Y offsets from nearY within the step delta for a 2-block passable
-   * gap. Checks nearY first (no step), then alternates up/down.
-   *
-   * @return the Y of the walkable gap, or Integer.MIN_VALUE if none found
-   */
-  private static int findWalkableY(
-      Level level, BlockPos.MutableBlockPos mutable,
-      int x, int z, int nearY, int stepDelta) {
+  /** True when no flood is active or the current flood has finished. */
+  public boolean isComplete() { return !active || complete; }
 
-    // Check exact Y first (most common: flat ground)
-    if (isPassableAt(level, mutable, x, nearY, z)) return nearY;
+  /** True when a flood has been started (may or may not be complete). */
+  public boolean isActive() { return active; }
 
-    // Check offsets: ±1, ±2, etc.
-    for (int dy = 1; dy <= stepDelta; dy++) {
-      if (isPassableAt(level, mutable, x, nearY + dy, z)) return nearY + dy;
-      if (isPassableAt(level, mutable, x, nearY - dy, z)) return nearY - dy;
+  /** Returns the current result snapshot. */
+  public Result currentResult() {
+    if (!active) return EMPTY;
+    return new Result(reachable, unknownChunkFrontier,
+        statesVisited, reachable.size(), complete,
+        originX, originZ, maxRadiusSq, totalElapsedNanos);
+  }
+
+  /** Deactivates the flood. Previous Results remain valid. */
+  public void reset() {
+    active = false;
+    complete = true;
+    reachable = null;
+    visitedPoses = null;
+  }
+
+  // -- Queue --
+
+  private void enqueue(int x, int z, int y) {
+    if (tail >= capacity) {
+      capacity *= 2;
+      queueX = Arrays.copyOf(queueX, capacity);
+      queueZ = Arrays.copyOf(queueZ, capacity);
+      queueY = Arrays.copyOf(queueY, capacity);
     }
+    queueX[tail] = x;
+    queueZ[tail] = z;
+    queueY[tail] = y;
+    tail++;
+  }
 
+  // -- Block checks --
+
+  /**
+   * Finds a walkable Y near the given Y by checking the exact position
+   * first, then offsets up to ±STEP_DELTA. A single hasChunkAt check
+   * covers the whole column (all reads share the same X/Z).
+   */
+  private int findWalkableY(Level level, int x, int z, int nearY) {
+    if (nearY <= minBuildHeight || nearY >= maxBuildHeight) return Integer.MIN_VALUE;
+    mutable.set(x, nearY, z);
+    if (!level.hasChunkAt(mutable)) return Integer.MIN_VALUE;
+
+    // Fast path: exact Y (most common on flat ground)
+    if (CaveStandability.isStandableAtY(level, mutable, nearY)) return nearY;
+
+    // Check step offsets ±1, ±2
+    for (int dy = 1; dy <= STEP_DELTA; dy++) {
+      int up = nearY + dy;
+      if (up > minBuildHeight && up < maxBuildHeight
+          && CaveStandability.isStandableAtY(level, mutable, up)) {
+        return up;
+      }
+      int down = nearY - dy;
+      if (down > minBuildHeight && down < maxBuildHeight
+          && CaveStandability.isStandableAtY(level, mutable, down)) {
+        return down;
+      }
+    }
     return Integer.MIN_VALUE;
   }
 
-  /** Returns true if a player could stand at (x, y, z): both feet and head passable. */
-  private static boolean isPassableAt(
-      Level level, BlockPos.MutableBlockPos mutable, int x, int y, int z) {
-    mutable.set(x, y, z);
-    if (!level.hasChunkAt(mutable)) return false;
-    if (!isCavePassable(level.getBlockState(mutable))) return false;
-    mutable.setY(y + 1);
-    return isCavePassable(level.getBlockState(mutable));
-  }
+  // -- Key packing --
 
-  private static boolean isCavePassable(BlockState state) {
-    return !state.blocksMotion();
-  }
-
-  /** Packs block X and Z into a single long key for hash lookups. */
-  static long packXZ(int x, int z) {
-    return ((long) x << 32) | (z & 0xFFFFFFFFL);
+  /** Packs signed X/Z (26-bit each) and Y (12-bit) into a long key. */
+  private static long packXYZ(int x, int y, int z) {
+    long px = x & 0x3FFFFFFL;
+    long pz = z & 0x3FFFFFFL;
+    long py = y & 0xFFFL;
+    return (px << 38) | (pz << 12) | py;
   }
 }
