@@ -1,6 +1,7 @@
 package dev.mapnhud.client;
 
 import net.minecraft.client.Minecraft;
+import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.levelgen.Heightmap;
 import xyz.kwahson.core.config.SafeConfig;
 
@@ -29,7 +30,8 @@ public final class CaveModeTracker {
   public static void tick(Minecraft mc) {
     if (mc.player == null || mc.level == null) return;
 
-    int blockY = mc.player.blockPosition().getY();
+    BlockPos pos = mc.player.blockPosition();
+    int blockY = pos.getY();
     playerY = blockY;
 
     boolean caveEnabled = SafeConfig.getBool(MapnHudConfig.CAVE_MODE_ENABLED, true);
@@ -38,10 +40,7 @@ public final class CaveModeTracker {
       return;
     }
 
-    int surfaceY = mc.level.getHeight(
-        Heightmap.Types.WORLD_SURFACE,
-        mc.player.blockPosition().getX(),
-        mc.player.blockPosition().getZ());
+    int surfaceY = mc.level.getHeight(Heightmap.Types.WORLD_SURFACE, pos.getX(), pos.getZ());
 
     if (caveMode) {
       if (blockY >= surfaceY - 1) caveMode = false;

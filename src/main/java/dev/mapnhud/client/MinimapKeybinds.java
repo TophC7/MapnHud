@@ -8,17 +8,16 @@ import org.lwjgl.glfw.GLFW;
 import xyz.kwahson.core.config.SafeConfig;
 
 /**
- * Keybind registration and zoom state for the minimap.
- *
- * <p>The zoom key cycles through preset scale levels at runtime.
- * Config-driven zoom syncs on each tick via {@link #tick()}, called
- * by {@link MinimapConfigCache}.
+ * Zoom keybind for the minimap. The Z key writes the next zoom level directly
+ * to {@link MapnHudConfig#MAP_ZOOM}, and {@link #getScale()} reads back through
+ * {@link MinimapConfigCache}. Config screen and keybind share a single source
+ * of truth, so live edits in the screen propagate without any extra wiring.
  */
-public class MinimapKeybinds {
+public final class MinimapKeybinds {
+
+  private MinimapKeybinds() {}
 
   private static final int[] ZOOM_SCALES = MapnHudConfig.ZOOM_SCALES;
-  private static int runtimeZoomIndex = -1;
-  private static int lastConfigZoom = -1;
 
   private static final KeyMapping ZOOM_KEY = new KeyMapping(
       "key." + MapnHudMod.MOD_ID + ".zoom",
@@ -31,22 +30,17 @@ public class MinimapKeybinds {
     event.register(ZOOM_KEY);
   }
 
-  /** Syncs zoom from config and handles key presses. Called once per tick. */
+  /** Cycles MAP_ZOOM on each Z press. Called by the tick handler before the cache refresh. */
   static void tick() {
-    int configZoom = SafeConfig.getInt(MapnHudConfig.MAP_ZOOM, 1);
-    if (configZoom != lastConfigZoom) {
-      lastConfigZoom = configZoom;
-      runtimeZoomIndex = indexForScale(configZoom);
-    }
-
     while (ZOOM_KEY.consumeClick()) {
-      runtimeZoomIndex = (runtimeZoomIndex + 1) % ZOOM_SCALES.length;
+      int current = SafeConfig.getInt(MapnHudConfig.MAP_ZOOM, ZOOM_SCALES[0]);
+      int idx = indexForScale(current);
+      MapnHudConfig.MAP_ZOOM.set(ZOOM_SCALES[(idx + 1) % ZOOM_SCALES.length]);
     }
   }
 
   public static int getScale() {
-    if (runtimeZoomIndex < 0) return 1;
-    return ZOOM_SCALES[runtimeZoomIndex];
+    return MinimapConfigCache.getZoomScale();
   }
 
   private static int indexForScale(int scale) {

@@ -48,6 +48,9 @@ public final class MinimapLayer {
   /** Padding from screen edge. */
   private static final int MARGIN = 8;
 
+  /** sqrt(2): the smallest scale that keeps a rotated square covering its bounding box. */
+  private static final float ROT_FILL_SCALE = (float) Math.sqrt(2.0);
+
   private static final MinimapRenderer renderer = new MinimapRenderer();
 
   /** Last texture ID from the renderer, readable by the config screen preview. */
@@ -74,9 +77,9 @@ public final class MinimapLayer {
 
     // All config values cached per-tick by MinimapConfigCache, no config tree traversal here
     int configSize = MinimapConfigCache.getDisplaySize();
-    float aspectRatio = MinimapConfigCache.getAspectRatio();
+    double aspectRatio = MinimapConfigCache.getAspectRatio();
     int displayW = configSize;
-    int displayH = Math.round(configSize / aspectRatio);
+    int displayH = (int) Math.round(configSize / aspectRatio);
     int texSize = displayW;
     int scale = MinimapKeybinds.getScale();
     float pixelScale = 1.0f / scale;
@@ -99,7 +102,7 @@ public final class MinimapLayer {
     int screenW = graphics.guiWidth();
     int screenH = graphics.guiHeight();
 
-    MapnHudConfig.ScreenCorner corner = MinimapConfigCache.getPosition();
+    ScreenCorner corner = MinimapConfigCache.getPosition();
     int mapX, mapY;
     switch (corner) {
       case TOP_LEFT -> { mapX = MARGIN; mapY = MARGIN; }
@@ -133,9 +136,7 @@ public final class MinimapLayer {
     graphics.pose().translate(centerX, centerY, 0);
     graphics.pose().mulPose(Axis.ZP.rotationDegrees(-rotation));
 
-    // Scale by sqrt(2) so rotated square always fills the display
-    float rotScale = 1.42f;
-    graphics.pose().scale(rotScale, rotScale, 1.0f);
+    graphics.pose().scale(ROT_FILL_SCALE, ROT_FILL_SCALE, 1.0f);
 
     // Draw the quad as a square (texSize x texSize) so it fills the display
     // rectangle at any rotation angle. The scissor clips to the actual frame shape.
@@ -164,7 +165,7 @@ public final class MinimapLayer {
 
     // -- Player dots (inside the rotated pose stack so they rotate with the map) --
     int halfBlocks = (texSize / 2) * scale;
-    renderPlayerDots(graphics, mc, player, playerX, playerZ, displayW, displayH, pixelScale, halfBlocks);
+    renderPlayerDots(graphics, mc, player, playerX, playerZ, texSize, pixelScale, halfBlocks);
 
     graphics.pose().popPose();
     graphics.disableScissor();
@@ -197,11 +198,12 @@ public final class MinimapLayer {
    */
   private static void renderPlayerDots(
       GuiGraphics graphics, Minecraft mc, LocalPlayer localPlayer,
-      double playerX, double playerZ, int displayW, int displayH,
+      double playerX, double playerZ, int texSize,
       float pixelScale, int halfBlocks) {
 
-    float halfW = displayW / 2.0f;
-    float halfH = displayH / 2.0f;
+    // dots live in the inner pose space whose origin is the square texture, so both
+    // axes use the same half. Using displayH/2 here would mis-place Z when shape != 1.
+    float half = texSize / 2.0f;
 
     for (AbstractClientPlayer other : mc.level.players()) {
       if (other == localPlayer) continue;
@@ -219,9 +221,9 @@ public final class MinimapLayer {
         clamped = true;
       }
 
-      // Convert world offset to pixel coordinates on the display quad
-      float px = (float) (dx * pixelScale) + halfW;
-      float pz = (float) (dz * pixelScale) + halfH;
+      // Convert world offset to pixel coordinates on the texture quad
+      float px = (float) (dx * pixelScale) + half;
+      float pz = (float) (dz * pixelScale) + half;
 
       // Alpha fading: vivid close, fades to 100 at max distance
       int alpha;

@@ -1,13 +1,10 @@
 package dev.mapnhud.client;
 
-import dev.mapnhud.client.MapnHudConfig.OverlayAlign;
-import dev.mapnhud.client.MapnHudConfig.OverlayPosition;
-import dev.mapnhud.client.MapnHudConfig.ScreenCorner;
-import dev.mapnhud.client.MapnHudConfig.ShadingMode;
-import dev.mapnhud.client.MapnHudConfig.TooltipPosition;
+import dev.mapnhud.client.overlay.InfoOverlayScreen;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.screens.Screen;
 import xyz.kwahson.core.config.ConfigTab;
@@ -41,7 +38,7 @@ public class MapnHudConfigScreen {
 
     tab.left(tab.toggle("Lock North Up", MapnHudConfig.MAP_NORTH_LOCK));
     tab.right(tab.cycle("Shape",
-        ShapePreset.closest((double) SafeConfig.getFloat(MapnHudConfig.MAP_SHAPE, 1.0f)),
+        ShapePreset.closest(SafeConfig.getDouble(MapnHudConfig.MAP_SHAPE, 1.0)),
         ShapePreset::label, List.of(ShapePreset.ALL),
         (btn, val) -> MapnHudConfig.MAP_SHAPE.set(val.ratio())));
     tab.nextRow();
@@ -72,8 +69,8 @@ public class MapnHudConfigScreen {
     tab.nextRow();
 
     tab.left(tab.button("Configure Lines...", btn -> {
-      var mc = net.minecraft.client.Minecraft.getInstance();
-      mc.setScreen(dev.mapnhud.client.overlay.InfoOverlayScreen.create(mc.screen));
+      Minecraft mc = Minecraft.getInstance();
+      mc.setScreen(InfoOverlayScreen.create(mc.screen));
     }));
   }
 
@@ -193,10 +190,22 @@ public class MapnHudConfigScreen {
         new TextColorPreset("Gold", 0xFFAA00),
     };
 
+    /** Nearest preset by Manhattan distance in RGB space. */
     static TextColorPreset closest(int val) {
+      int vR = (val >> 16) & 0xFF;
+      int vG = (val >> 8) & 0xFF;
+      int vB = val & 0xFF;
       TextColorPreset best = ALL[0];
+      int bestDist = Integer.MAX_VALUE;
       for (TextColorPreset p : ALL) {
-        if (p.rgb == val) return p;
+        int pR = (p.rgb >> 16) & 0xFF;
+        int pG = (p.rgb >> 8) & 0xFF;
+        int pB = p.rgb & 0xFF;
+        int dist = Math.abs(pR - vR) + Math.abs(pG - vG) + Math.abs(pB - vB);
+        if (dist < bestDist) {
+          bestDist = dist;
+          best = p;
+        }
       }
       return best;
     }

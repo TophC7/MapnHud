@@ -70,8 +70,14 @@ public class MinimapAssembler {
       int seaLevel, RenderConfig config) {
 
     ensureArrays(mapSize);
-    gather(cache, centerX, centerZ, scale, mapSize);
-    shade(image, mapSize, seaLevel, config, centerX, centerZ, scale);
+
+    // viewport bounds in world coordinates, computed once and shared by both passes
+    int halfWorld = (mapSize / 2) * scale;
+    int minWorldX = centerX - halfWorld;
+    int minWorldZ = centerZ - halfWorld;
+
+    gather(cache, minWorldX, minWorldZ, scale, mapSize);
+    shade(image, mapSize, seaLevel, config, minWorldX, minWorldZ, scale);
   }
 
   private void ensureArrays(int mapSize) {
@@ -90,14 +96,17 @@ public class MinimapAssembler {
 
   /**
    * Pass 1: Populate viewport arrays from cached chunk data.
+   *
+   * <p>Iterates with px outer / pz inner and indexes as {@code px * mapSize + pz},
+   * keeping pz contiguous in memory. Both shade methods use the same nesting order
+   * so the linear access pattern stays cache-friendly. Flipping the layout in one
+   * place without flipping the other will silently destroy locality.
+   *
+   * <p>Invariant: when {@code vHasData[i]} is false, the other arrays at index i are
+   * undefined and must not be read. Downstream code must check vHasData first.
    */
   private void gather(
-      ChunkColorCache cache, int centerX, int centerZ, int scale, int mapSize) {
-
-    int half = mapSize / 2;
-    int halfWorld = half * scale;
-    int minWorldX = centerX - halfWorld;
-    int minWorldZ = centerZ - halfWorld;
+      ChunkColorCache cache, int minWorldX, int minWorldZ, int scale, int mapSize) {
 
     // Track last chunk to avoid redundant cache lookups
     int lastCx = Integer.MIN_VALUE;
@@ -140,7 +149,9 @@ public class MinimapAssembler {
           vKnown[i] = lastData.isKnown(lx, lz);
           vHasData[i] = true;
         } else {
+          // reset enough state that any accidental read of vKnown gives a safe value
           vFieldStates[i] = 0;
+          vKnown[i] = false;
           vHasData[i] = false;
         }
       }
@@ -161,11 +172,11 @@ public class MinimapAssembler {
    * directional lighting) based on the config's shading mode.
    */
   private void shade(NativeImage image, int mapSize, int seaLevel,
-                     RenderConfig config, int centerX, int centerZ, int scale) {
+                     RenderConfig config, int minWorldX, int minWorldZ, int scale) {
     this.cfg = config;
 
     if (config.isClassic()) {
-      shadeClassic(image, mapSize, seaLevel, centerX, centerZ, scale);
+      shadeClassic(image, mapSize, seaLevel, minWorldX, minWorldZ, scale);
     } else {
       shadeHeightfield(image, mapSize, seaLevel);
     }
@@ -188,12 +199,7 @@ public class MinimapAssembler {
    * still eliminated, unlike the original per-chunk implementation.
    */
   private void shadeClassic(NativeImage image, int mapSize, int seaLevel,
-                            int centerX, int centerZ, int scale) {
-    int half = mapSize / 2;
-    int halfWorld = half * scale;
-    int minWorldX = centerX - halfWorld;
-    int minWorldZ = centerZ - halfWorld;
-
+                            int minWorldX, int minWorldZ, int scale) {
     for (int px = 0; px < mapSize; px++) {
       int worldX = minWorldX + px * scale;
 

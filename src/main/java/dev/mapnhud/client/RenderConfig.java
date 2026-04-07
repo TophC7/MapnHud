@@ -12,7 +12,7 @@ import xyz.kwahson.core.config.SafeConfig;
  */
 public record RenderConfig(
     // Mode
-    MapnHudConfig.ShadingMode shadingMode,
+    ShadingMode shadingMode,
     // Lighting (heightfield mode)
     int lightAngle,
     float lightElevation,
@@ -35,7 +35,7 @@ public record RenderConfig(
 
   /** Default values matching the hardcoded constants before config was added. */
   public static final RenderConfig DEFAULT = new RenderConfig(
-      MapnHudConfig.ShadingMode.CLASSIC,
+      ShadingMode.CLASSIC,
       315, 2.0f, 0.55f, 2.5f,
       true, 0.05f, 0.3f,
       0.012f, 0.78f, 1.15f, 0.75f,
@@ -43,7 +43,7 @@ public record RenderConfig(
   );
 
   public boolean isClassic() {
-    return shadingMode == MapnHudConfig.ShadingMode.CLASSIC;
+    return shadingMode == ShadingMode.CLASSIC;
   }
 
   /** Reads current config values into a snapshot. Fallbacks reference DEFAULT to avoid drift. */
@@ -51,19 +51,19 @@ public record RenderConfig(
     return new RenderConfig(
         SafeConfig.getEnum(MapnHudConfig.RENDER_SHADING_MODE, DEFAULT.shadingMode),
         SafeConfig.getInt(MapnHudConfig.RENDER_LIGHT_ANGLE, DEFAULT.lightAngle),
-        SafeConfig.getFloat(MapnHudConfig.RENDER_LIGHT_ELEVATION, DEFAULT.lightElevation),
-        SafeConfig.getFloat(MapnHudConfig.RENDER_AMBIENT, DEFAULT.ambient),
-        SafeConfig.getFloat(MapnHudConfig.RENDER_TERRAIN_SMOOTHNESS, DEFAULT.terrainSmoothness),
+        (float) SafeConfig.getDouble(MapnHudConfig.RENDER_LIGHT_ELEVATION, DEFAULT.lightElevation),
+        (float) SafeConfig.getDouble(MapnHudConfig.RENDER_AMBIENT, DEFAULT.ambient),
+        (float) SafeConfig.getDouble(MapnHudConfig.RENDER_TERRAIN_SMOOTHNESS, DEFAULT.terrainSmoothness),
         SafeConfig.getBool(MapnHudConfig.RENDER_AO_ENABLED, DEFAULT.aoEnabled),
-        SafeConfig.getFloat(MapnHudConfig.RENDER_AO_STRENGTH, DEFAULT.aoStrength),
-        SafeConfig.getFloat(MapnHudConfig.RENDER_AO_MAX, DEFAULT.aoMax),
-        SafeConfig.getFloat(MapnHudConfig.RENDER_HEIGHT_FACTOR, DEFAULT.heightFactor),
-        SafeConfig.getFloat(MapnHudConfig.RENDER_HEIGHT_MIN, DEFAULT.heightModMin),
-        SafeConfig.getFloat(MapnHudConfig.RENDER_HEIGHT_MAX, DEFAULT.heightModMax),
-        SafeConfig.getFloat(MapnHudConfig.RENDER_LEAF_SHADE, DEFAULT.leafShade),
-        SafeConfig.getFloat(MapnHudConfig.RENDER_WATER_ALPHA_BASE, DEFAULT.waterAlphaBase),
-        SafeConfig.getFloat(MapnHudConfig.RENDER_WATER_ALPHA_DEPTH, DEFAULT.waterAlphaPerDepth),
-        SafeConfig.getFloat(MapnHudConfig.RENDER_WATER_ALPHA_MAX, DEFAULT.waterAlphaMax)
+        (float) SafeConfig.getDouble(MapnHudConfig.RENDER_AO_STRENGTH, DEFAULT.aoStrength),
+        (float) SafeConfig.getDouble(MapnHudConfig.RENDER_AO_MAX, DEFAULT.aoMax),
+        (float) SafeConfig.getDouble(MapnHudConfig.RENDER_HEIGHT_FACTOR, DEFAULT.heightFactor),
+        (float) SafeConfig.getDouble(MapnHudConfig.RENDER_HEIGHT_MIN, DEFAULT.heightModMin),
+        (float) SafeConfig.getDouble(MapnHudConfig.RENDER_HEIGHT_MAX, DEFAULT.heightModMax),
+        (float) SafeConfig.getDouble(MapnHudConfig.RENDER_LEAF_SHADE, DEFAULT.leafShade),
+        (float) SafeConfig.getDouble(MapnHudConfig.RENDER_WATER_ALPHA_BASE, DEFAULT.waterAlphaBase),
+        (float) SafeConfig.getDouble(MapnHudConfig.RENDER_WATER_ALPHA_DEPTH, DEFAULT.waterAlphaPerDepth),
+        (float) SafeConfig.getDouble(MapnHudConfig.RENDER_WATER_ALPHA_MAX, DEFAULT.waterAlphaMax)
     );
   }
 }

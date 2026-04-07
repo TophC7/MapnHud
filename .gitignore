@@ -19,6 +19,9 @@ dist/
 *.swo
 *~
 .DS_Store
+.history/
+.vscode/launch.json
+.eclipse/
 
 # Nix
 .direnv/
@@ -26,5 +29,3 @@ dist/
 # Project specific
 run/
 .claude/
-.history/
-.vscode/launch.json

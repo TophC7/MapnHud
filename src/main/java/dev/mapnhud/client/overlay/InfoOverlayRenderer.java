@@ -1,10 +1,10 @@
 package dev.mapnhud.client.overlay;
 
 import dev.mapnhud.client.MapnHudConfig;
-import dev.mapnhud.client.MapnHudConfig.OverlayAlign;
-import dev.mapnhud.client.MapnHudConfig.OverlayPosition;
-import dev.mapnhud.client.MapnHudConfig.ScreenCorner;
 import dev.mapnhud.client.MinimapConfigCache;
+import dev.mapnhud.client.OverlayAlign;
+import dev.mapnhud.client.OverlayPosition;
+import dev.mapnhud.client.ScreenCorner;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;

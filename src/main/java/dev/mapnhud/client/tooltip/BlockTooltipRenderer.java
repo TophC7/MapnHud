@@ -2,7 +2,7 @@ package dev.mapnhud.client.tooltip;
 
 import dev.mapnhud.MapnHudMod;
 import dev.mapnhud.client.MapnHudConfig;
-import dev.mapnhud.client.MapnHudConfig.TooltipPosition;
+import dev.mapnhud.client.TooltipPosition;
 import dev.mapnhud.client.overlay.FormatUtil;
 import java.util.HashMap;
 import java.util.Map;
