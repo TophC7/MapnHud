@@ -1,0 +1,33 @@
+modLoader = "lowcodefml"
+loaderVersion = "[1,)"
+license = "GPL-3.0-or-later"
+
+[[mods]]
+modId = "mapnhud"
+version = "${file.jarVersion}"
+displayName = "Kwah's Map n Hud"
+description = ""
+author = "Kwahson"
+displayURL = "https://github.com/tophc7/Map"
+
+[[dependencies.mapnhud]]
+modId = "neoforge"
+type = "required"
+versionRange = "[21.1,)"
+ordering = "NONE"
+side = "BOTH"
+
+[[dependencies.mapnhud]]
+modId = "minecraft"
+type = "required"
+versionRange = "[1.21.1,)"
+ordering = "NONE"
+side = "BOTH"
+
+[[dependencies.mapnhud]]
+modId = "kwahs_core"
+type = "required"
+versionRange = "[0.2.0,)"
+ordering = "NONE"
+side = "BOTH"
+
