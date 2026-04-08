@@ -7,6 +7,9 @@ Everything related to the minimap: rendering, visuals, data, and interaction.
 #### Open tweaks
 
 - [ ] Tune height/edge shading factors after more play-testing
+- [ ] **Zoom configs**: current `MAP_ZOOM` is pixels-per-block (1=default, 3=crisp 3×3). Re-evaluate after play-testing whether any of these are worth adding: a true zoom-out mode for wider overview, fractional zoom steps, separate keybinds for zoom-in vs zoom-out, or per-mode zoom (cave vs surface).
+- [ ] **Preview widget dimensions**: `MinimapPreviewWidget` hardcodes a 200×200 blit and passes 200 as `textureWidth`/`Height` to `GuiGraphics.blit`. The real texture is now variable-sized (`texSide` depends on `size × shape × zoom`), and shape≠1 means the preview stretches a square texture into a square preview — users tuning shape see the wrong thing. Rework to respect actual texture dimensions and draw at the configured aspect ratio.
+- [ ] **Texture reallocation on zoom change**: `MinimapRenderer.update` currently releases the `DynamicTexture` and allocates a fresh `NativeImage` every time `texSide` changes (i.e., every Z keypress). Low impact (user-initiated, not per-frame), but a single max-size allocation with UV sub-sampling would remove the churn.
 
 #### Tuning (needs play-testing)
 
@@ -17,6 +20,12 @@ Play-test in varied terrain and decide on final defaults for:
 - [ ] AO: strength, max darkening
 - [ ] Terrain: height scale, height min/max, leaf shade
 - [ ] Water: base alpha, per-depth, max alpha
+
+### Cave Mode Bugs
+
+- [ ] **Airborne black-out**: flood seed calls `findWalkableY` from the player's actual Y with only ±2 block search. When flying/jumping/elytra puts the player more than 2 blocks above ground, the seed fails and the entire radius renders black. Fix: search further down from player Y to find the nearest ground, or fall back to the last known walkable Y.
+- [ ] **Flood flicker on update**: when a new flood starts (player moves 3+ blocks), the old result is discarded immediately. The BFS is time-budgeted so it takes several ticks to fill out, and during that window the map shows UNKNOWN/BOUNDARY colors growing outward from the player. Fix: double-buffer flood results, keep rendering the previous result until the new flood is complete, then swap.
+- [ ] **Inside/outside radius inconsistency**: inside the flood radius, unreachable columns render as black walls. Outside the radius, those same columns fall back to cached terrain (grey). Walking away from a black wall makes it flip to grey. Needs a design decision: fade walls at the radius edge, always show terrain color with a tint for walls, or extend wall rendering beyond the radius.
 
 ### Iteration 5: Cave Mode
 
@@ -31,9 +40,8 @@ Walls are black, floors are colored by the block underfoot.
 - [x] Config: cave auto-switch toggle (on/off)
 - [x] Cave stats overlay provider (configurable info line)
 - [x] Live-only visibility (no persistence yet, fog of war is iteration 6+)
-- [ ] Surface/cave indicator on map frame
-- [ ] Nether dimension handling (always cave mode? ceiling detection?)
-- [ ] End dimension handling (never cave mode? open sky detection?)
+- [x] Nether dimension handling (always cave mode)
+- [x] End dimension handling (always surface mode)
 
 ### Iteration 6: Map Polish + Expanded View
 

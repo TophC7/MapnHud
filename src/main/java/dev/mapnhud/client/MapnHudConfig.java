@@ -73,7 +73,7 @@ public final class MapnHudConfig {
     builder.push("map");
 
     MAP_ZOOM = builder
-        .comment("Default zoom level (blocks per pixel). 1 = closest, 3 = farthest.")
+        .comment("Default zoom level. 1 = default view (1 pixel per block), 3 = zoomed in (each block is 3x3 pixels).")
         .defineInRange("zoom", ZOOM_SCALES[0], ZOOM_SCALES[0], ZOOM_SCALES[ZOOM_SCALES.length - 1]);
 
     MAP_NORTH_LOCK = builder
@@ -89,11 +89,11 @@ public final class MapnHudConfig {
         .defineInRange("opacity", 1.0, 0.3, 1.0);
 
     MAP_SIZE = builder
-        .comment("Map frame width in GUI pixels. Larger shows more terrain at the same zoom.")
+        .comment("Map frame height in GUI pixels. Width is derived by multiplying this by the shape ratio.")
         .defineInRange("size", 160, 80, 320);
 
     MAP_SHAPE = builder
-        .comment("Map width-to-height ratio. 1.0 = square, 1.5 = 3:2 wide.")
+        .comment("Map width-to-height ratio. 1.0 = square, 1.5 = 3:2 wide, 2.0 = 2:1 wide (extends view, does not crop).")
         .defineInRange("shape", 1.0, 1.0, 2.0);
 
     builder.pop();

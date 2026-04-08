@@ -48,9 +48,6 @@ public final class MinimapLayer {
   /** Padding from screen edge. */
   private static final int MARGIN = 8;
 
-  /** sqrt(2): the smallest scale that keeps a rotated square covering its bounding box. */
-  private static final float ROT_FILL_SCALE = (float) Math.sqrt(2.0);
-
   private static final MinimapRenderer renderer = new MinimapRenderer();
 
   /** Last texture ID from the renderer, readable by the config screen preview. */
@@ -75,14 +72,12 @@ public final class MinimapLayer {
 
     if (mc.options.hideGui || mc.getDebugOverlay().showDebugScreen()) return;
 
-    // All config values cached per-tick by MinimapConfigCache, no config tree traversal here
-    int configSize = MinimapConfigCache.getDisplaySize();
-    double aspectRatio = MinimapConfigCache.getAspectRatio();
-    int displayW = configSize;
-    int displayH = (int) Math.round(configSize / aspectRatio);
-    int texSize = displayW;
-    int scale = MinimapKeybinds.getScale();
-    float pixelScale = 1.0f / scale;
+    // Per-tick snapshot from MinimapConfigCache — derived geometry is already computed.
+    int displayW = MinimapConfigCache.getDisplayWidth();
+    int displayH = MinimapConfigCache.getDisplayHeight();
+    int quadSide = MinimapConfigCache.getQuadSide();
+    int texSide = MinimapConfigCache.getTexSide();
+    int zoom = MinimapConfigCache.getZoomScale();
 
     // Interpolated position for smooth scrolling
     float partialTick = delta.getGameTimeDeltaPartialTick(false);
@@ -95,7 +90,7 @@ public final class MinimapLayer {
     boolean caveMode = CaveModeTracker.isCaveMode();
     int heightRef = caveMode ? CaveModeTracker.getPlayerY() : player.level().getSeaLevel();
     RenderConfig renderConfig = MinimapConfigCache.getRenderConfig();
-    ResourceLocation texId = renderer.update(playerX, playerZ, cache, cacheUpdated, scale, texSize, heightRef, renderConfig);
+    ResourceLocation texId = renderer.update(playerX, playerZ, cache, cacheUpdated, texSide, heightRef, renderConfig);
     lastTextureId = texId;
     if (texId == null) return;
 
@@ -121,11 +116,12 @@ public final class MinimapLayer {
       rotation = yaw + 180.0f;
     }
 
-    // Sub-block fractional offset for smooth scrolling
+    // Sub-block fractional offset for smooth scrolling. One world block is `zoom`
+    // pixels on the rendered quad, so the fractional offset scales by zoom.
     float fractX = (float) (playerX - Math.floor(playerX));
     float fractZ = (float) (playerZ - Math.floor(playerZ));
-    float offsetX = -fractX * pixelScale;
-    float offsetZ = -fractZ * pixelScale;
+    float offsetX = -fractX * zoom;
+    float offsetZ = -fractZ * zoom;
 
     // -- Scissor + background --
     graphics.enableScissor(mapX, mapY, mapX + displayW, mapY + displayH);
@@ -136,13 +132,13 @@ public final class MinimapLayer {
     graphics.pose().translate(centerX, centerY, 0);
     graphics.pose().mulPose(Axis.ZP.rotationDegrees(-rotation));
 
-    graphics.pose().scale(ROT_FILL_SCALE, ROT_FILL_SCALE, 1.0f);
-
-    // Draw the quad as a square (texSize x texSize) so it fills the display
-    // rectangle at any rotation angle. The scissor clips to the actual frame shape.
+    // The quad is quadSide x quadSide in pose-local pixels, sized to cover the scissor
+    // rectangle at any rotation. The texSide x texSide texture (1 block per pixel) is
+    // nearest-neighbor upscaled to the quad, so each world block becomes a crisp
+    // zoom x zoom display block.
     graphics.pose().translate(
-        offsetX - texSize / 2.0f,
-        offsetZ - texSize / 2.0f,
+        offsetX - quadSide / 2.0f,
+        offsetZ - quadSide / 2.0f,
         0);
 
     float opacity = MinimapConfigCache.getOpacity();
@@ -154,9 +150,9 @@ public final class MinimapLayer {
     Matrix4f matrix = graphics.pose().last().pose();
     BufferBuilder buf = Tesselator.getInstance().begin(
         VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_TEX);
-    buf.addVertex(matrix, 0, texSize, 0).setUv(0, 1);
-    buf.addVertex(matrix, texSize, texSize, 0).setUv(1, 1);
-    buf.addVertex(matrix, texSize, 0, 0).setUv(1, 0);
+    buf.addVertex(matrix, 0, quadSide, 0).setUv(0, 1);
+    buf.addVertex(matrix, quadSide, quadSide, 0).setUv(1, 1);
+    buf.addVertex(matrix, quadSide, 0, 0).setUv(1, 0);
     buf.addVertex(matrix, 0, 0, 0).setUv(0, 0);
     BufferUploader.drawWithShader(buf.buildOrThrow());
 
@@ -164,8 +160,8 @@ public final class MinimapLayer {
     RenderSystem.disableBlend();
 
     // -- Player dots (inside the rotated pose stack so they rotate with the map) --
-    int halfBlocks = (texSize / 2) * scale;
-    renderPlayerDots(graphics, mc, player, playerX, playerZ, texSize, pixelScale, halfBlocks);
+    int halfBlocks = MinimapConfigCache.getDotClampBlocks();
+    renderPlayerDots(graphics, mc, player, playerX, playerZ, quadSide, zoom, halfBlocks);
 
     graphics.pose().popPose();
     graphics.disableScissor();
@@ -198,12 +194,12 @@ public final class MinimapLayer {
    */
   private static void renderPlayerDots(
       GuiGraphics graphics, Minecraft mc, LocalPlayer localPlayer,
-      double playerX, double playerZ, int texSize,
-      float pixelScale, int halfBlocks) {
+      double playerX, double playerZ, int quadSide, int zoom, int halfBlocks) {
 
-    // dots live in the inner pose space whose origin is the square texture, so both
-    // axes use the same half. Using displayH/2 here would mis-place Z when shape != 1.
-    float half = texSize / 2.0f;
+    // Dots draw in the rotated pose whose local space spans 0..quadSide in both axes,
+    // with (quadSide/2, quadSide/2) aligned to the player's block center. One world
+    // block is `zoom` pose pixels (matching the texture's nearest-neighbor upscale).
+    float half = quadSide / 2.0f;
 
     for (AbstractClientPlayer other : mc.level.players()) {
       if (other == localPlayer) continue;
@@ -221,9 +217,9 @@ public final class MinimapLayer {
         clamped = true;
       }
 
-      // Convert world offset to pixel coordinates on the texture quad
-      float px = (float) (dx * pixelScale) + half;
-      float pz = (float) (dz * pixelScale) + half;
+      // Convert world offset (blocks) to quad-local pixel coordinates
+      float px = (float) (dx * zoom) + half;
+      float pz = (float) (dz * zoom) + half;
 
       // Alpha fading: vivid close, fades to 100 at max distance
       int alpha;

@@ -14,8 +14,6 @@ public final class MinimapConfigCache {
 
   // -- frame layout --
 
-  private static int cachedDisplaySize = 160;
-  private static double cachedAspectRatio = 1.0;
   private static float cachedOpacity = 1.0f;
   private static boolean cachedNorthLock = false;
   private static ScreenCorner cachedPosition = ScreenCorner.TOP_RIGHT;
@@ -24,6 +22,14 @@ public final class MinimapConfigCache {
 
   private static RenderConfig cachedRenderConfig = RenderConfig.DEFAULT;
   private static int cachedZoomScale = MapnHudConfig.ZOOM_SCALES[0];
+
+  // -- derived viewport geometry (recomputed in refresh() from size/shape/zoom) --
+
+  private static int cachedDisplayWidth = 160;
+  private static int cachedDisplayHeight = 160;
+  private static int cachedQuadSide = 160;
+  private static int cachedTexSide = 160;
+  private static int cachedDotClampBlocks = 80;
 
   // -- scan radius (computed from config + render distance each tick) --
 
@@ -39,13 +45,28 @@ public final class MinimapConfigCache {
    * @param renderDistance current vanilla render distance, used to scale the scan radius
    */
   public static void refresh(int renderDistance) {
-    cachedDisplaySize = SafeConfig.getInt(MapnHudConfig.MAP_SIZE, 160);
-    cachedAspectRatio = SafeConfig.getDouble(MapnHudConfig.MAP_SHAPE, 1.0);
+    int size = SafeConfig.getInt(MapnHudConfig.MAP_SIZE, 160);
+    double shape = SafeConfig.getDouble(MapnHudConfig.MAP_SHAPE, 1.0);
     cachedOpacity = (float) SafeConfig.getDouble(MapnHudConfig.MAP_OPACITY, 1.0);
     cachedNorthLock = SafeConfig.getBool(MapnHudConfig.MAP_NORTH_LOCK, false);
     cachedPosition = SafeConfig.getEnum(MapnHudConfig.MAP_POSITION, ScreenCorner.TOP_RIGHT);
     cachedRenderConfig = RenderConfig.fromConfig();
     cachedZoomScale = SafeConfig.getInt(MapnHudConfig.MAP_ZOOM, MapnHudConfig.ZOOM_SCALES[0]);
+
+    // Derived geometry: frame extends horizontally for wide aspect ratios, quadSide
+    // is a square large enough to cover the scissored frame at any rotation, and
+    // texSide is the world-block resolution of the assembler texture (upscaled by
+    // zoom on draw). Rounding quadSide to a multiple of zoom keeps the texture-to-
+    // display ratio exactly integer.
+    cachedDisplayHeight = size;
+    cachedDisplayWidth = (int) Math.round(size * shape);
+    int rawQuad = (int) Math.ceil(Math.sqrt(
+        (double) cachedDisplayWidth * cachedDisplayWidth
+            + (double) cachedDisplayHeight * cachedDisplayHeight));
+    cachedQuadSide = ((rawQuad + cachedZoomScale - 1) / cachedZoomScale) * cachedZoomScale;
+    cachedTexSide = cachedQuadSide / cachedZoomScale;
+    cachedDotClampBlocks =
+        Math.min(cachedDisplayWidth, cachedDisplayHeight) / (2 * cachedZoomScale);
 
     double multiplier = SafeConfig.getDouble(MapnHudConfig.SCAN_RADIUS_MULTIPLIER, 1.0);
     cachedScanRadiusChunks = Math.max(1, (int) (renderDistance * multiplier));
@@ -58,8 +79,11 @@ public final class MinimapConfigCache {
     cachedCaveFloodRadiusBlocks = SafeConfig.getInt(MapnHudConfig.CAVE_FLOOD_RADIUS, 100);
   }
 
-  public static int getDisplaySize() { return cachedDisplaySize; }
-  public static double getAspectRatio() { return cachedAspectRatio; }
+  public static int getDisplayWidth() { return cachedDisplayWidth; }
+  public static int getDisplayHeight() { return cachedDisplayHeight; }
+  public static int getQuadSide() { return cachedQuadSide; }
+  public static int getTexSide() { return cachedTexSide; }
+  public static int getDotClampBlocks() { return cachedDotClampBlocks; }
   public static float getOpacity() { return cachedOpacity; }
   public static boolean isNorthLocked() { return cachedNorthLock; }
   public static ScreenCorner getPosition() { return cachedPosition; }

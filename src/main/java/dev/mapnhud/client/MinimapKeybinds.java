@@ -9,9 +9,10 @@ import xyz.kwahson.core.config.SafeConfig;
 
 /**
  * Zoom keybind for the minimap. The Z key writes the next zoom level directly
- * to {@link MapnHudConfig#MAP_ZOOM}, and {@link #getScale()} reads back through
- * {@link MinimapConfigCache}. Config screen and keybind share a single source
- * of truth, so live edits in the screen propagate without any extra wiring.
+ * to {@link MapnHudConfig#MAP_ZOOM}, and render code reads it back through
+ * {@link MinimapConfigCache#getZoomScale()}. Config screen and keybind share a
+ * single source of truth, so live edits in the screen propagate without any
+ * extra wiring.
  */
 public final class MinimapKeybinds {
 
@@ -37,10 +38,6 @@ public final class MinimapKeybinds {
       int idx = indexForScale(current);
       MapnHudConfig.MAP_ZOOM.set(ZOOM_SCALES[(idx + 1) % ZOOM_SCALES.length]);
     }
-  }
-
-  public static int getScale() {
-    return MinimapConfigCache.getZoomScale();
   }
 
   private static int indexForScale(int scale) {

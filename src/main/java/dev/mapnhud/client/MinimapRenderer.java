@@ -24,26 +24,25 @@ public class MinimapRenderer {
   private int lastBlockZ = Integer.MIN_VALUE;
   private boolean needsRefresh = true;
 
-  private int lastScale = -1;
-  private int currentSize = -1;
   private int lastSeaLevel = Integer.MIN_VALUE;
   private RenderConfig lastRenderConfig;
 
   /**
    * Update the minimap texture for the current frame.
    * Re-assembles when the player moves to a new block, cache data changes,
-   * the zoom scale changes, rendering config changes, or the map size changes.
+   * rendering config changes, or the map size changes.
    *
-   * @param mapSize    texture resolution in pixels (matches config frame size)
+   * @param mapSize    texture resolution in world-block pixels (1 pixel per world block).
+   *                   The MinimapLayer computes this as quadSide/zoom and upscales on draw.
    * @param seaLevel   world sea level for height-relative shading
    * @param config     rendering config snapshot from this tick
    */
   public ResourceLocation update(
       double playerX, double playerZ, ChunkColorCache cache,
-      boolean cacheUpdated, int scale, int mapSize,
+      boolean cacheUpdated, int mapSize,
       int seaLevel, RenderConfig config) {
 
-    if (texture == null || mapSize != currentSize) {
+    if (image == null || mapSize != image.getWidth()) {
       recreateTexture(mapSize);
     }
 
@@ -51,13 +50,11 @@ public class MinimapRenderer {
     int blockZ = (int) Math.floor(playerZ);
 
     boolean posChanged = blockX != lastBlockX || blockZ != lastBlockZ;
-    boolean scaleChanged = scale != lastScale;
     boolean shadingChanged = seaLevel != lastSeaLevel || !config.equals(lastRenderConfig);
-    if (posChanged || cacheUpdated || scaleChanged || shadingChanged || needsRefresh) {
-      assembler.assemble(image, cache, blockX, blockZ, scale, mapSize, seaLevel, config);
+    if (posChanged || cacheUpdated || shadingChanged || needsRefresh) {
+      assembler.assemble(image, cache, blockX, blockZ, mapSize, seaLevel, config);
       lastBlockX = blockX;
       lastBlockZ = blockZ;
-      lastScale = scale;
       lastSeaLevel = seaLevel;
       lastRenderConfig = config;
       needsRefresh = false;
@@ -69,7 +66,6 @@ public class MinimapRenderer {
 
   private void recreateTexture(int size) {
     close();
-    currentSize = size;
     image = new NativeImage(NativeImage.Format.RGBA, size, size, false);
     texture = new DynamicTexture(image);
     textureId = Minecraft.getInstance()

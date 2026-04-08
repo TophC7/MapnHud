@@ -48,6 +48,13 @@ public class MinimapAssembler {
   private boolean[] vKnown;
   private boolean[] vHasData;
 
+  // Per-row circle mask: pz ∈ [rowPzMin[px], rowPzMax[px]] are the only
+  // pixels we ever assemble. Everything outside the inscribed circle of
+  // the rotated display is never visible at any rotation, so we skip it
+  // and save ~21% (1 − π/4) of per-frame work.
+  private int[] rowPzMin;
+  private int[] rowPzMax;
+
   // Per-frame shading state (set in shade(), read by compute methods)
   private RenderConfig cfg;
   private float lightX, lightY, lightZ;
@@ -55,29 +62,36 @@ public class MinimapAssembler {
   /**
    * Assemble and shade the visible area into the given image.
    *
+   * <p>The image is always sampled at one pixel per world block. Zoom is handled
+   * upstream by the renderer/layer — this assembler has no concept of scale.
+   *
+   * <p>Only pixels inside the inscribed circle of the rotated display are written;
+   * the square corners are never shown at any rotation, so we skip them entirely.
+   * Pixels outside the circle keep whatever stale data is in the image buffer,
+   * which is invisible because the scissor clips them away.
+   *
    * @param image     square NativeImage to write into (ABGR format)
    * @param cache     the chunk color cache (raw column data)
    * @param centerX   player's block X
    * @param centerZ   player's block Z
-   * @param scale     blocks per pixel (1 = normal, 2 = zoomed out 2x, etc.)
-   * @param mapSize   pixel dimensions of the square image
+   * @param mapSize   pixel dimensions of the square image (= world blocks wide)
    * @param seaLevel  world sea level for height-relative brightness
    * @param config    rendering config snapshot from this tick
    */
   public void assemble(
       NativeImage image, ChunkColorCache cache,
-      int centerX, int centerZ, int scale, int mapSize,
+      int centerX, int centerZ, int mapSize,
       int seaLevel, RenderConfig config) {
 
     ensureArrays(mapSize);
 
     // viewport bounds in world coordinates, computed once and shared by both passes
-    int halfWorld = (mapSize / 2) * scale;
+    int halfWorld = mapSize / 2;
     int minWorldX = centerX - halfWorld;
     int minWorldZ = centerZ - halfWorld;
 
-    gather(cache, minWorldX, minWorldZ, scale, mapSize);
-    shade(image, mapSize, seaLevel, config, minWorldX, minWorldZ, scale);
+    gather(cache, minWorldX, minWorldZ, mapSize);
+    shade(image, mapSize, seaLevel, config, minWorldX, minWorldZ);
   }
 
   private void ensureArrays(int mapSize) {
@@ -91,7 +105,33 @@ public class MinimapAssembler {
     vIsLeaf = new boolean[len];
     vKnown = new boolean[len];
     vHasData = new boolean[len];
+    rowPzMin = new int[mapSize];
+    rowPzMax = new int[mapSize];
     allocatedSize = mapSize;
+
+    // mapSize is already texSide = ceil(diagonal / zoom), so the rotated
+    // display's corners sit at exactly mapSize/2 blocks from center. Use
+    // (mapSize+1)/2 as the integer radius so odd sizes round up and the
+    // corner pixels at 45° rotation are always inside the included set.
+    int center = mapSize / 2;
+    int radius = (mapSize + 1) / 2;
+    int radiusSq = radius * radius;
+    for (int px = 0; px < mapSize; px++) {
+      int dx = px - center;
+      int rem = radiusSq - dx * dx;
+      if (rem < 0) {
+        rowPzMin[px] = 1;
+        rowPzMax[px] = 0; // empty range, inner loop body never runs
+      } else {
+        int halfSpan = (int) Math.sqrt(rem);
+        rowPzMin[px] = Math.max(0, center - halfSpan);
+        rowPzMax[px] = Math.min(mapSize - 1, center + halfSpan);
+      }
+    }
+    // vHasData is freshly zeroed by `new boolean[len]`, so pixels outside
+    // the circle stay false forever. safeHeight() and the shade passes
+    // rely on that: neighbor lookups into skipped pixels return fallback
+    // instead of reading uninitialized data.
   }
 
   /**
@@ -106,7 +146,7 @@ public class MinimapAssembler {
    * undefined and must not be read. Downstream code must check vHasData first.
    */
   private void gather(
-      ChunkColorCache cache, int minWorldX, int minWorldZ, int scale, int mapSize) {
+      ChunkColorCache cache, int minWorldX, int minWorldZ, int mapSize) {
 
     // Track last chunk to avoid redundant cache lookups
     int lastCx = Integer.MIN_VALUE;
@@ -116,11 +156,13 @@ public class MinimapAssembler {
     CaveFloodFill.Result flood = caveMode ? cache.getFloodResult() : CaveFloodFill.EMPTY;
 
     for (int px = 0; px < mapSize; px++) {
-      int wx = minWorldX + px * scale;
+      int wx = minWorldX + px;
       int cx = wx >> 4;
+      int pzStart = rowPzMin[px];
+      int pzEnd = rowPzMax[px];
 
-      for (int pz = 0; pz < mapSize; pz++) {
-        int wz = minWorldZ + pz * scale;
+      for (int pz = pzStart; pz <= pzEnd; pz++) {
+        int wz = minWorldZ + pz;
         int cz = wz >> 4;
         int i = px * mapSize + pz;
 
@@ -172,11 +214,11 @@ public class MinimapAssembler {
    * directional lighting) based on the config's shading mode.
    */
   private void shade(NativeImage image, int mapSize, int seaLevel,
-                     RenderConfig config, int minWorldX, int minWorldZ, int scale) {
+                     RenderConfig config, int minWorldX, int minWorldZ) {
     this.cfg = config;
 
     if (config.isClassic()) {
-      shadeClassic(image, mapSize, seaLevel, minWorldX, minWorldZ, scale);
+      shadeClassic(image, mapSize, seaLevel, minWorldX, minWorldZ);
     } else {
       shadeHeightfield(image, mapSize, seaLevel);
     }
@@ -199,11 +241,13 @@ public class MinimapAssembler {
    * still eliminated, unlike the original per-chunk implementation.
    */
   private void shadeClassic(NativeImage image, int mapSize, int seaLevel,
-                            int minWorldX, int minWorldZ, int scale) {
+                            int minWorldX, int minWorldZ) {
     for (int px = 0; px < mapSize; px++) {
-      int worldX = minWorldX + px * scale;
+      int worldX = minWorldX + px;
+      int pzStart = rowPzMin[px];
+      int pzEnd = rowPzMax[px];
 
-      for (int pz = 0; pz < mapSize; pz++) {
+      for (int pz = pzStart; pz <= pzEnd; pz++) {
         int i = px * mapSize + pz;
 
         if (!vHasData[i]) {
@@ -218,7 +262,7 @@ public class MinimapAssembler {
           continue;
         }
 
-        int worldZ = minWorldZ + pz * scale;
+        int worldZ = minWorldZ + pz;
         int baseColor = vBaseColors[i];
         int height = vHeights[i];
         int waterDepth = vWaterDepths[i];
@@ -280,7 +324,9 @@ public class MinimapAssembler {
     computeLightDirection(cfg);
 
     for (int px = 0; px < mapSize; px++) {
-      for (int pz = 0; pz < mapSize; pz++) {
+      int pzStart = rowPzMin[px];
+      int pzEnd = rowPzMax[px];
+      for (int pz = pzStart; pz <= pzEnd; pz++) {
         int i = px * mapSize + pz;
 
         if (!vHasData[i]) {
