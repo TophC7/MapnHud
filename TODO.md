@@ -24,7 +24,7 @@ Play-test in varied terrain and decide on final defaults for:
 ### Cave Mode Bugs
 
 - [ ] **Airborne black-out**: flood seed calls `findWalkableY` from the player's actual Y with only ±2 block search. When flying/jumping/elytra puts the player more than 2 blocks above ground, the seed fails and the entire radius renders black. Fix: search further down from player Y to find the nearest ground, or fall back to the last known walkable Y.
-- [ ] **Flood flicker on update**: when a new flood starts (player moves 3+ blocks), the old result is discarded immediately. The BFS is time-budgeted so it takes several ticks to fill out, and during that window the map shows UNKNOWN/BOUNDARY colors growing outward from the player. Fix: double-buffer flood results, keep rendering the previous result until the new flood is complete, then swap.
+- [x] **Flood flicker on update**: when a new flood starts (player moves 3+ blocks), the old result is discarded immediately. The BFS is time-budgeted so it takes several ticks to fill out, and during that window the map shows UNKNOWN/BOUNDARY colors growing outward from the player. Fix: double-buffer flood results, keep rendering the previous result until the new flood is complete, then swap.
 - [ ] **Inside/outside radius inconsistency**: inside the flood radius, unreachable columns render as black walls. Outside the radius, those same columns fall back to cached terrain (grey). Walking away from a black wall makes it flip to grey. Needs a design decision: fade walls at the radius edge, always show terrain color with a tint for walls, or extend wall rendering beyond the radius.
 
 ### Iteration 5: Cave Mode

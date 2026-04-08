@@ -240,9 +240,9 @@ public final class ChunkColorCache {
         queues.priorityQueueSize(), queues.scanQueueSize(),
         queues.refloodQueueSize());
     if (result.dataChanged()) dirty = true;
-    if (result.started()) {
-      rescanImmediate(level, playerPos);
-    }
+    // CLAUDE: don't rescan on start — renderResult still holds the previous
+    // completed flood, so rescanning would just re-bake the same data. The
+    // rescan fires on justCompleted when the new result is ready.
     if (result.justCompleted()) {
       rescanImmediate(level, playerPos);
       enqueueFloodRadius(level, playerPos);

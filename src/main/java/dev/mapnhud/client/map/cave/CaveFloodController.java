@@ -45,6 +45,15 @@ public final class CaveFloodController {
   private final CaveCacheDiagnostics diagnostics;
 
   private CaveFloodFill.Result floodResult = CaveFloodFill.EMPTY;
+
+  /**
+   * Stable result exposed for rendering and chunk scanning. Only updated
+   * when a flood completes, so consumers never see a half-populated BFS.
+   * This eliminates the flicker that occurred when the old result was
+   * discarded immediately on flood start.
+   */
+  private CaveFloodFill.Result renderResult = CaveFloodFill.EMPTY;
+
   private int lastFloodX = Integer.MIN_VALUE;
   private int lastFloodY = Integer.MIN_VALUE;
   private int lastFloodZ = Integer.MIN_VALUE;
@@ -59,7 +68,7 @@ public final class CaveFloodController {
   // -- Public API --
 
   public CaveFloodFill.Result currentResult() {
-    return floodResult;
+    return renderResult;
   }
 
   public boolean isComplete() {
@@ -73,6 +82,7 @@ public final class CaveFloodController {
   /** Resets the controller for a mode switch or dimension change. */
   public void reset() {
     floodResult = CaveFloodFill.EMPTY;
+    renderResult = CaveFloodFill.EMPTY;
     lastFloodX = Integer.MIN_VALUE;
     lastFloodY = Integer.MIN_VALUE;
     lastFloodZ = Integer.MIN_VALUE;
@@ -125,6 +135,7 @@ public final class CaveFloodController {
     if (caveFlood.isComplete()) {
       if (started) {
         floodResult = caveFlood.currentResult();
+        renderResult = floodResult;
         diagnostics.recordFloodCompletion();
         return new TickResult(true, true, true);
       }
@@ -135,6 +146,7 @@ public final class CaveFloodController {
     floodResult = caveFlood.advance(level, budget);
 
     if (caveFlood.isComplete()) {
+      renderResult = floodResult;
       diagnostics.recordFloodCompletion();
       return new TickResult(true, started, true);
     }
